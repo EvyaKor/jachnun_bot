@@ -53,6 +53,41 @@ jachnun_bot/
 
 ---
 
+## Available Skills
+
+### MCP Servers
+| # | Skill | Source | Purpose | Needs Key? |
+|---|-------|--------|---------|------------|
+| 1 | GitHub | `@modelcontextprotocol/server-github` | Repo, PRs, issues, branch management | Yes — `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| 2 | Git | `@modelcontextprotocol/server-git` | Local git ops: log, diff, blame | No |
+| 3 | Memory | `@modelcontextprotocol/server-memory` | Persistent knowledge graph across sessions | No |
+| 4 | Sequential Thinking | `@modelcontextprotocol/server-sequential-thinking` | Structured planning before coding | No |
+| 5 | Fetch | `@modelcontextprotocol/server-fetch` | Read any URL, doc, or API | No |
+| 6 | Brave Search | `@modelcontextprotocol/server-brave-search` | Web research for any topic | Yes — `BRAVE_API_KEY` |
+| 7 | Filesystem | `@modelcontextprotocol/server-filesystem` | Safe file read/write with access controls | No |
+| 8 | Playwright | `microsoft/playwright-mcp` | Browser automation & UI testing | No |
+| 9 | Time | `@modelcontextprotocol/server-time` | Scheduling, timezones, deadlines | No |
+| 10 | Google Maps | `@modelcontextprotocol/server-google-maps` | Address validation & routing | Yes — `GOOGLE_MAPS_API_KEY` |
+| 11 | Figma | `figma/mcp-server` | Convert Figma designs to production code | Yes — Figma token |
+
+### Claude Code Skills
+| # | Skill | Source | Purpose |
+|---|-------|--------|---------|
+| 1 | Skill Creator | `anthropics/skills` | Interactively build new Claude Code skills |
+| 2 | MCP Builder | `ComposioHQ/awesome-claude-skills` | Build production-ready MCP servers |
+| 3 | Self-Healing | `PolarOrchid/ClaudeWatch` | Auto-detect and fix broken code/config |
+| 4 | Frontend Design | `anthropics/skills` | Build distinctive, production-grade UIs |
+| 5 | Webapp Testing | `ComposioHQ/awesome-claude-skills` | Test web apps with Playwright + screenshots |
+| 6 | Researcher | `altmbr/claude-research-skill` | Multi-agent deep research & synthesis |
+| 7 | Trail of Bits Security | `trailofbits/skills` | Security audit & vulnerability detection |
+| 8 | Figma-to-Code | `figma/mcp-server-guide` | Figma design → production code conversion |
+| 9 | Superpowers | `obra/superpowers` | TDD, debugging, brainstorming enhancements |
+| 10 | Cost Reducer | community | Token & cloud cost optimization |
+
+> API keys live in `~/.claude/settings.json`. Never hardcode or commit them.
+
+---
+
 ## Progress Log
 
 ### Done
