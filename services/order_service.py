@@ -58,7 +58,7 @@ def create_order(
     delivery_type: str,
     delivery_cost: float,
     db: Session,
-    delivery_address: str = None,
+    delivery_address: str | None = None,
 ) -> Order:
     """
     יוצר הזמנה חדשה במסד הנתונים עם תאריך שבת אוטומטי.

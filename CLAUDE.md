@@ -1,19 +1,111 @@
-# Jachnun Express – AI Agent (WhatsApp)
+# Jachnun Express – WhatsApp Order Bot
 
 ## Project Identity
-**Project Name:** Jachnun Express
-**Type:** WhatsApp-based AI Agent for a food delivery business
-**Stack:** Python · FastAPI · Twilio (WhatsApp) · SQLAlchemy · SQLite
-**Goal:** A conversational AI agent that handles orders, customer management, and delivery scheduling entirely over WhatsApp.
+**Project Name:** Jachnun Express (ג'חנון אקספרס)
+**Type:** WhatsApp ordering bot for a Jachnun/Kubenia home food business
+**Stack:** Python · FastAPI · Twilio (WhatsApp) · SQLAlchemy · SQLite · pytest
+**Deployed on:** Render (free tier — SQLite resets on redeploy; migrate to Postgres before going live)
 
 ---
 
 ## Architecture Overview
-- **Entry point:** WhatsApp webhook via Twilio → FastAPI
-- **AI brain:** Claude API (claude-sonnet-4-6) for NLU and response generation
-- **State Machine:** Every conversation has a state (e.g. `GREETING`, `BROWSING_MENU`, `AWAITING_ADDRESS`, `CONFIRMING_ORDER`, `ORDER_PLACED`, `AWAITING_PAYMENT`)
-- **Database:** SQLite via SQLAlchemy (tables: `customers`, `orders`, `order_items`, `menu_items`)
-- **Scheduling:** Delivery time slots managed via the Time MCP
+
+```
+WhatsApp user → Twilio → POST /webhook → FastAPI → handle_message()
+                                                        ↓
+                                               state_machine (DB-backed)
+                                                        ↓
+                                               order_service / menu_service
+                                                        ↓
+                                               SQLite (SQLAlchemy ORM)
+```
+
+- **Webhook:** `POST /webhook` receives Twilio form fields (`From`, `Body`), returns TwiML XML
+- **State machine:** DB-backed — `current_state` + `temp_order_data` (JSON) stored on `Customer` row; in-memory cache (`_sessions` dict) with write-through to DB
+- **Menu:** Dynamic from DB (`MenuItem` table). `is_extra=True` for add-ons; mains listed first, extras after.
+- **Admin dashboard:** `GET /admin` — orders grouped by Saturday date, with ✅ Confirm / ❌ Cancel buttons
+- **Keep-alive:** Pings `RENDER_EXTERNAL_URL/` every 14 min to prevent Render sleep
+
+---
+
+## State Machine Flow
+
+```
+GREETING
+  └─► (orders open) → ADDING_ITEMS
+  └─► (orders closed) → stays GREETING, sends closure message
+
+ADDING_ITEMS
+  └─► user types item number/name → adds to cart
+  └─► "סיום" / "הזמנה" → CHOOSING_DELIVERY
+
+CHOOSING_DELIVERY
+  └─► "1" → self-pickup → AWAITING_NAME
+  └─► "2" / "3" → delivery → AWAITING_ADDRESS
+
+AWAITING_ADDRESS
+  └─► validates: ≥2 words AND at least 1 digit → AWAITING_NAME
+
+AWAITING_NAME
+  └─► any text → saves name → AWAITING_PICKUP_TIME
+
+AWAITING_PICKUP_TIME
+  └─► validates against PICKUP_SLOTS → CONFIRMING_ORDER
+
+CONFIRMING_ORDER
+  └─► "כן" → creates order in DB, notifies Gabriel → ORDER_PLACED (then resets to GREETING)
+  └─► "לא" → ADDING_ITEMS (back to cart)
+
+ORDER_PLACED → immediately resets to GREETING
+```
+
+---
+
+## Key Constants (handlers/message_handler.py)
+
+| Constant | Value |
+|---|---|
+| `DELIVERY_OPTIONS["1"]` | איסוף עצמי — cost 0 |
+| `DELIVERY_OPTIONS["2"]` | משלוח רגיל — cost 15 |
+| `DELIVERY_OPTIONS["3"]` | משלוח מהיר — cost 25 |
+| `PICKUP_SLOTS` | `["09:00", "10:00", "11:00", "12:00"]` |
+| `BUSINESS_INFO["address"]` | רחוב הרב קוק 12, רמת גן |
+| `PRODUCT_IMAGES` | List of CDN image URLs for menu items |
+
+---
+
+## Order Cutoff Logic (services/order_service.py)
+
+- `is_orders_closed()` returns `True` if:
+  - Friday (`weekday == 4`) AND `hour >= 11`
+  - Saturday (`weekday == 5`) — all day
+- Auto-reopens Sunday morning (no action needed)
+- Gabriel does NOT type any commands — fully automatic
+- Closure message: `"ההזמנות לשבת הקרובה נסגרו..."` (see `ORDERS_CLOSED_MSG`)
+- Images are only sent when state transitions from GREETING → ADDING_ITEMS (not when closed)
+
+---
+
+## Database Models (database/models.py)
+
+| Table | Key fields |
+|---|---|
+| `customers` | `phone_number`, `name`, `current_state`, `temp_order_data` (JSON) |
+| `menu_items` | `name`, `description`, `price`, `is_dairy`, `is_available`, `is_extra` |
+| `orders` | `customer_id`, `pickup_date`, `pickup_time`, `delivery_type`, `delivery_cost`, `delivery_address`, `total_price`, `status` |
+| `order_items` | `order_id`, `menu_item_id`, `quantity` |
+
+Menu seed (db.py): ג'חנון ₪25, קובנייה ₪20 (חלבי), ביצה נוספת ₪3 (extra), רסק עגניות+סחוג ₪3 (extra)
+
+---
+
+## Testing (tests/test_bot.py)
+
+- **~190 tests** covering full conversation flows, edge cases, and cutoff logic
+- Uses `StaticPool` SQLite in-memory DB shared across test session
+- **autouse fixture** patches `handlers.message_handler.is_orders_closed` → `False` so tests don't depend on real day/time
+- `TestOrderCutoff`: patches `handlers.message_handler.is_orders_closed` directly per test
+- Run: `python -m pytest tests/test_bot.py -v`
 
 ---
 
@@ -26,91 +118,61 @@
 5. **Secrets:** All API keys and tokens go in `.env` — never hardcoded, never committed
 6. **Modularity:** Keep files small and single-purpose (routes, models, services, handlers)
 7. **Error handling:** Always return a user-friendly WhatsApp message on failure — never expose stack traces
+8. **No "פרווה":** The business is not labeled pareve — never use this word anywhere in messages, menu, or UI
 
 ---
 
-## Project Structure (Target)
+## Project Structure
+
 ```
 jachnun_bot/
 ├── CLAUDE.md
 ├── README.md
-├── .env                  # secrets (gitignored)
+├── .env                        # secrets (gitignored)
 ├── .gitignore
 ├── requirements.txt
-├── main.py               # FastAPI app + Twilio webhook
-├── state_machine.py      # Chat state logic
+├── main.py                     # FastAPI app, Twilio webhook, admin dashboard
+├── state_machine.py            # DB-backed state machine with in-memory cache
 ├── database/
-│   ├── models.py         # SQLAlchemy models
-│   └── db.py             # DB connection
+│   ├── models.py               # SQLAlchemy models
+│   └── db.py                   # DB engine, SessionLocal, seed_menu
 ├── services/
-│   ├── order_service.py
-│   ├── menu_service.py
-│   └── delivery_service.py
+│   └── order_service.py        # create_order, notify_gabriel, is_orders_closed, get_next_saturday
 ├── handlers/
-│   └── message_handler.py
-└── jachnun.db            # SQLite DB (gitignored)
+│   └── message_handler.py      # handle_message — all chat state logic
+├── tests/
+│   └── test_bot.py             # ~190 pytest tests
+└── jachnun.db                  # SQLite DB (gitignored)
 ```
 
 ---
 
-## Available Skills
+## Deployment Notes
 
-### MCP Servers
-| # | Skill | Source | Purpose | Needs Key? |
-|---|-------|--------|---------|------------|
-| 1 | GitHub | `@modelcontextprotocol/server-github` | Repo, PRs, issues, branch management | Yes — `GITHUB_PERSONAL_ACCESS_TOKEN` |
-| 2 | Git | `@modelcontextprotocol/server-git` | Local git ops: log, diff, blame | No |
-| 3 | Memory | `@modelcontextprotocol/server-memory` | Persistent knowledge graph across sessions | No |
-| 4 | Sequential Thinking | `@modelcontextprotocol/server-sequential-thinking` | Structured planning before coding | No |
-| 5 | Fetch | `@modelcontextprotocol/server-fetch` | Read any URL, doc, or API | No |
-| 6 | Brave Search | `@modelcontextprotocol/server-brave-search` | Web research for any topic | Yes — `BRAVE_API_KEY` |
-| 7 | Filesystem | `@modelcontextprotocol/server-filesystem` | Safe file read/write with access controls | No |
-| 8 | Playwright | `microsoft/playwright-mcp` | Browser automation & UI testing | No |
-| 9 | Time | `@modelcontextprotocol/server-time` | Scheduling, timezones, deadlines | No |
-| 10 | Google Maps | `@modelcontextprotocol/server-google-maps` | Address validation & routing | Yes — `GOOGLE_MAPS_API_KEY` |
-| 11 | Figma | `figma/mcp-server` | Convert Figma designs to production code | Yes — Figma token |
-
-### Claude Code Skills
-| # | Skill | Source | Purpose |
-|---|-------|--------|---------|
-| 1 | Skill Creator | `anthropics/skills` | Interactively build new Claude Code skills |
-| 2 | MCP Builder | `ComposioHQ/awesome-claude-skills` | Build production-ready MCP servers |
-| 3 | Self-Healing | `PolarOrchid/ClaudeWatch` | Auto-detect and fix broken code/config |
-| 4 | Frontend Design | `anthropics/skills` | Build distinctive, production-grade UIs |
-| 5 | Webapp Testing | `ComposioHQ/awesome-claude-skills` | Test web apps with Playwright + screenshots |
-| 6 | Researcher | `altmbr/claude-research-skill` | Multi-agent deep research & synthesis |
-| 7 | Trail of Bits Security | `trailofbits/skills` | Security audit & vulnerability detection |
-| 8 | Figma-to-Code | `figma/mcp-server-guide` | Figma design → production code conversion |
-| 9 | Superpowers | `obra/superpowers` | TDD, debugging, brainstorming enhancements |
-| 10 | Cost Reducer | community | Token & cloud cost optimization |
-
-> API keys live in `~/.claude/settings.json`. Never hardcode or commit them.
+- **Platform:** Render (free tier)
+- **Keep-alive:** `RENDER_EXTERNAL_URL` env var → pings `/` every 14 min
+- **CRITICAL:** SQLite file resets on every Render redeploy — migrate to Postgres before going live with real customers
+- **Twilio sandbox:** Set webhook URL to `https://<render-url>/webhook`
+- **Gabriel's phone:** `whatsapp:+972539475881` (hardcoded in order_service.py — move to `.env` if needed)
 
 ---
 
 ## Progress Log
 
 ### Done
-- [x] Git repository initialized
-- [x] Connected to GitHub (`EvyaKor/jachnun_bot`)
-- [x] README.md created and pushed
-- [x] CLAUDE.md initialized
-- [x] `.gitignore` created
-- [x] `requirements.txt` created
-- [x] Python virtual environment set up
-- [x] MCP servers configured
-
-### In Progress
-- [ ] Scaffold project directory structure
-- [ ] Create SQLAlchemy models (`customers`, `orders`, `menu_items`)
-- [ ] Set up FastAPI app with Twilio webhook endpoint
-- [ ] Build state machine core logic
+- [x] Full project scaffolded and deployed
+- [x] DB-backed state machine
+- [x] Dynamic menu from DB
+- [x] Full ordering flow (cart → delivery → address → name → time → confirm)
+- [x] Address validation (≥2 words + digit)
+- [x] Automatic order cutoff (Friday 11:00 AM, all Saturday)
+- [x] Admin dashboard with ✅/❌ per order, revenue stats
+- [x] Gabriel WhatsApp notification on new order
+- [x] Israel timezone (Asia/Jerusalem) for all date/time logic
+- [x] ~190 passing tests with time-mocked fixtures
+- [x] System audit: removed dead code, fixed images-when-closed bug, updated type hints
 
 ### Up Next
-- [ ] Connect Claude API as the AI brain
-- [ ] Build menu browsing flow
-- [ ] Build order placement flow
-- [ ] Add address validation via Google Maps MCP
-- [ ] Add delivery scheduling logic
-- [ ] Admin dashboard (optional, via Puppeteer)
-- [ ] Deploy to cloud (Railway / Render)
+- [ ] Migrate DB to Postgres (Render Postgres add-on) before going live
+- [ ] Real customer onboarding
+- [ ] Optional: SMS fallback if WhatsApp unavailable

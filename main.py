@@ -58,11 +58,11 @@ async def whatsapp_webhook(
     """מקבל הודעת וואטסאפ מ-Twilio ומחזיר תשובה."""
     phone = From.replace("whatsapp:", "").strip()
     body = Body.strip()
-    is_greeting = get_state(phone) == ChatState.GREETING
+    was_greeting = get_state(phone) == ChatState.GREETING
     reply = handle_message(phone, body)
     response = MessagingResponse()
     response.message(reply)
-    if is_greeting:
+    if was_greeting and get_state(phone) == ChatState.ADDING_ITEMS:
         for img_url in PRODUCT_IMAGES:
             response.message("").media(img_url)
     return Response(content=str(response), media_type="application/xml")

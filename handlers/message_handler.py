@@ -16,11 +16,7 @@ PRODUCT_IMAGES = [
 ]
 
 BUSINESS_INFO = {
-    "name": "ג'חנון אקספרס",
     "address": "בני ברית 17, הוד השרון",
-    "pickup_from": "08:00",
-    "days": "שבת בלבד",
-    "contact": "גבריאל 053-9475881",
 }
 
 GABRIEL_PAYMENT_PHONE = "054-2380330"
@@ -231,9 +227,8 @@ def handle_message(phone: str, body: str) -> str:
             if item:
                 session["cart"][item.id] = session["cart"].get(item.id, 0) + 1
                 save_session(phone)
-                emoji = "✅"
                 return (
-                    f"{emoji} *{item.name}* נוסף לסל!\n\n"
+                    f"✅ *{item.name}* נוסף לסל!\n\n"
                     f"{format_cart(session['cart'], db)}\n\n"
                     f"המשך לבחור פריטים, או כתוב *סיום* להמשך"
                     f"{CANCEL_HINT}"
@@ -249,13 +244,16 @@ def handle_message(phone: str, body: str) -> str:
                     f"\n\n_⚠️ משלוח זמין מהזמנה מעל ₪{DELIVERY_MIN:.0f} בלבד_"
                     if subtotal < DELIVERY_MIN else ""
                 )
+                opt1 = DELIVERY_OPTIONS["1"]
+                opt2 = DELIVERY_OPTIONS["2"]
+                opt3 = DELIVERY_OPTIONS["3"]
                 return (
                     f"{format_cart(session['cart'], db)}\n\n"
                     f"📦 *איך תרצו לקבל את ההזמנה?*\n\n"
-                    f"1️⃣ איסוף עצמי (חינם)\n"
+                    f"1️⃣ {opt1['label']} (חינם)\n"
                     f"   📍 {BUSINESS_INFO['address']}\n\n"
-                    f"2️⃣ משלוח להוד השרון — ₪15\n"
-                    f"3️⃣ משלוח לכפר סבא — ₪25"
+                    f"2️⃣ {opt2['label']} — ₪{opt2['cost']:.0f}\n"
+                    f"3️⃣ {opt3['label']} — ₪{opt3['cost']:.0f}"
                     f"{delivery_note}"
                     f"{CANCEL_HINT}"
                 )
