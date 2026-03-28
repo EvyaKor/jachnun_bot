@@ -9,7 +9,8 @@ from fastapi.responses import Response, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from twilio.twiml.messaging_response import MessagingResponse
 from database.db import init_db, seed_menu, SessionLocal
-from database.models import Order, Customer
+from database.models import Order, OrderItem
+from sqlalchemy.orm import joinedload
 from handlers.message_handler import handle_message
 from services.order_service import get_next_saturday
 from collections import defaultdict
@@ -80,7 +81,10 @@ def admin_dashboard(request: Request):
     try:
         orders = (
             db.query(Order)
-            .join(Customer)
+            .options(
+                joinedload(Order.customer),
+                joinedload(Order.items).joinedload(OrderItem.menu_item),
+            )
             .order_by(Order.pickup_date, Order.pickup_time)
             .all()
         )
@@ -92,7 +96,7 @@ def admin_dashboard(request: Request):
         pending = sum(1 for o in orders if o.status == "ממתין")
         revenue = sum(o.total_price for o in orders if o.status != "בוטל")
 
-        return templates.TemplateResponse("admin.html", {
+        response_data = templates.TemplateResponse("admin.html", {
             "request": request,
             "grouped_orders": dict(grouped),
             "total_orders": len(orders),
@@ -100,6 +104,7 @@ def admin_dashboard(request: Request):
             "total_revenue": int(revenue),
             "next_saturday": get_next_saturday(),
         })
+        return response_data
     finally:
         db.close()
 
