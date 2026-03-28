@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-GABRIEL_PHONE = "whatsapp:+972542380330"
+GABRIEL_PHONE = "whatsapp:+972539475881"
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -35,6 +35,8 @@ def create_order(
     customer: Customer,
     cart: dict,
     pickup_time: str,
+    delivery_type: str,
+    delivery_cost: float,
     db: Session,
 ) -> Order:
     """
@@ -43,15 +45,18 @@ def create_order(
     """
     pickup_date = get_next_saturday()
 
-    total = sum(
+    subtotal = sum(
         db.query(MenuItem).filter(MenuItem.id == item_id).first().price * qty
         for item_id, qty in cart.items()
     )
+    total = subtotal + delivery_cost
 
     order = Order(
         customer_id=customer.id,
         pickup_date=pickup_date,
         pickup_time=pickup_time,
+        delivery_type=delivery_type,
+        delivery_cost=delivery_cost,
         total_price=total,
         status="ממתין",
     )
@@ -74,7 +79,8 @@ def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session):
     """
     lines = [f"🔔 *הזמנה חדשה #{order.id}*\n"]
     lines.append(f"👤 {customer.name or 'לא צוין'} | {customer.phone_number}")
-    lines.append(f"📅 {order.pickup_date} בשעה {order.pickup_time}\n")
+    lines.append(f"📅 {order.pickup_date} בשעה {order.pickup_time}")
+    lines.append(f"🚗 {order.delivery_type}\n")
     lines.append("🛒 פריטים:")
 
     for item_id, qty in cart.items():

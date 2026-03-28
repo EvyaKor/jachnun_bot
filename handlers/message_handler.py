@@ -11,17 +11,25 @@ from services.order_service import create_order, notify_gabriel, get_next_saturd
 
 BUSINESS_INFO = {
     "name": "ג'חנון אקספרס",
-    "address": "בני ברית 17/1 דירה 21 קומה 5, הוד השרון",
+    "address": "בני ברית 17, הוד השרון",
     "pickup_from": "08:00",
     "days": "שבת בלבד",
-    "contact": "גבריאל 054-2380330",
+    "contact": "גבריאל 053-9475881",
 }
+
+DELIVERY_OPTIONS = {
+    "1": {"label": "איסוף עצמי", "cost": 0.0},
+    "2": {"label": "משלוח להוד השרון", "cost": 15.0},
+    "3": {"label": "משלוח לכפר סבא", "cost": 25.0},
+}
+
+DELIVERY_MIN = 70.0  # מינימום הזמנה למשלוח
 
 MENU_TEXT = (
     "📋 *התפריט שלנו:*\n\n"
     "1️⃣ ג'חנון (פרווה) — ₪25\n"
     "   מוגש עם רסק, ביצה וסחוג 🍅🥚\n\n"
-    "2️⃣ קובנייה (חלבי) — ₪15\n"
+    "2️⃣ קובנייה (חלבי) — ₪20\n"
     "   מוגשת עם רסק, ביצה וסחוג 🍅🥚\n\n"
     "כתוב *1* להזמין ג'חנון\n"
     "כתוב *2* להזמין קובנייה\n"
@@ -32,7 +40,7 @@ WELCOME_TEXT = (
     "שלום וברוכים הבאים לג'חנון אקספרס! 🎉\n\n"
     "ג'חנונים וקובניות טריים וחמים שלא תוכלו להפסיק ללקק את האצבעות 😁\n\n"
     "📍 {address}\n"
-    "🕗 איסוף מ-{pickup_from} | {days}\n\n"
+    "🕗 {days} מ-{pickup_from}\n\n"
     "כתוב *תפריט* לצפייה בתפריט\n"
     "כתוב *הזמנה* להתחיל להזמין"
 ).format(**BUSINESS_INFO)
@@ -49,19 +57,31 @@ def get_or_create_customer(phone: str, db: Session) -> Customer:
     return customer
 
 
-def format_cart(cart: dict, db: Session) -> str:
-    """מחזיר תיאור טקסטואלי של סל הקניות הנוכחי."""
-    if not cart:
-        return "הסל שלך ריק."
-    lines = ["🛒 *הסל שלך:*"]
+def cart_subtotal(cart: dict, db: Session) -> float:
+    """מחשב את סכום הסל ללא משלוח."""
     total = 0.0
     for item_id, qty in cart.items():
         item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
         if item:
-            subtotal = item.price * qty
-            total += subtotal
-            lines.append(f"  {item.name} x{qty} — ₪{subtotal:.0f}")
-    lines.append(f"\n💰 *סה\"כ: ₪{total:.0f}*")
+            total += item.price * qty
+    return total
+
+
+def format_cart(cart: dict, db: Session, delivery_cost: float = 0.0) -> str:
+    """מחזיר תיאור טקסטואלי של סל הקניות הנוכחי."""
+    if not cart:
+        return "הסל שלך ריק."
+    lines = ["🛒 *הסל שלך:*"]
+    subtotal = 0.0
+    for item_id, qty in cart.items():
+        item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
+        if item:
+            line_total = item.price * qty
+            subtotal += line_total
+            lines.append(f"  {item.name} x{qty} — ₪{line_total:.0f}")
+    if delivery_cost > 0:
+        lines.append(f"  🚗 משלוח — ₪{delivery_cost:.0f}")
+    lines.append(f"\n💰 *סה\"כ: ₪{subtotal + delivery_cost:.0f}*")
     return "\n".join(lines)
 
 
@@ -109,27 +129,69 @@ def handle_message(phone: str, body: str) -> str:
             if body == "סיום":
                 if not session["cart"]:
                     return "הסל שלך ריק. כתוב *1* או *2* כדי להוסיף פריטים."
-                set_state(phone, ChatState.AWAITING_NAME)
-                return f"{format_cart(session['cart'], db)}\n\nמה השם שלך לצורך ההזמנה?"
+                set_state(phone, ChatState.CHOOSING_DELIVERY)
+                subtotal = cart_subtotal(session["cart"], db)
+                delivery_note = ""
+                if subtotal < DELIVERY_MIN:
+                    delivery_note = f"\n\n_⚠️ משלוח זמין בהזמנה מעל ₪{DELIVERY_MIN:.0f} בלבד_"
+                return (
+                    f"{format_cart(session['cart'], db)}\n\n"
+                    f"איך תרצה לקבל את ההזמנה? 🚗\n\n"
+                    f"1️⃣ איסוף עצמי (חינם)\n"
+                    f"   📍 {BUSINESS_INFO['address']}\n\n"
+                    f"2️⃣ משלוח להוד השרון — ₪15\n"
+                    f"3️⃣ משלוח לכפר סבא — ₪25"
+                    + delivery_note
+                )
+
+        # ---- מצב: בחירת סוג משלוח ----
+        if state == ChatState.CHOOSING_DELIVERY:
+            if body not in DELIVERY_OPTIONS:
+                return "כתוב *1* לאיסוף עצמי, *2* למשלוח להוד השרון, או *3* למשלוח לכפר סבא."
+
+            option = DELIVERY_OPTIONS[body]
+            subtotal = cart_subtotal(session["cart"], db)
+
+            if body in ("2", "3") and subtotal < DELIVERY_MIN:
+                return (
+                    f"⚠️ המינימום למשלוח הוא ₪{DELIVERY_MIN:.0f}.\n"
+                    f"סכום הסל שלך כרגע: ₪{subtotal:.0f}.\n\n"
+                    f"כתוב *חזור* כדי להוסיף עוד פריטים, או *1* לאיסוף עצמי."
+                )
+
+            session["delivery_type"] = option["label"]
+            session["delivery_cost"] = option["cost"]
+            set_state(phone, ChatState.AWAITING_NAME)
+            return f"בחרת: *{option['label']}* {'🚗' if option['cost'] > 0 else '🏃'}\n\nמה השם שלך לצורך ההזמנה?"
+
+        # ---- חזור להוספת פריטים ----
+        if body == "חזור" and state == ChatState.CHOOSING_DELIVERY:
+            set_state(phone, ChatState.ADDING_ITEMS)
+            return MENU_TEXT + "\n\nהמשך להוסיף פריטים וכתוב *סיום* בסיום:"
 
         # ---- מצב: ממתין לשם ----
         if state == ChatState.AWAITING_NAME:
             session["name"] = body
             set_state(phone, ChatState.AWAITING_PICKUP_TIME)
-            return f"תודה {body}! 😊\n\nבאיזו שעה תרצה לאסוף ביום שבת? (איסוף מ-08:00 עד גמר המלאי)"
+            return f"תודה {body}! 😊\n\nבאיזו שעה תרצה {'לאסוף' if session['delivery_type'] == 'איסוף עצמי' else 'לקבל את המשלוח'} ביום שבת?\n(החל מ-08:00)"
 
-        # ---- מצב: ממתין לשעת איסוף ----
+        # ---- מצב: ממתין לשעת איסוף/משלוח ----
         if state == ChatState.AWAITING_PICKUP_TIME:
             session["pickup_time"] = body
             set_state(phone, ChatState.CONFIRMING_ORDER)
-            cart_text = format_cart(session["cart"], db)
+            cart_text = format_cart(session["cart"], db, session["delivery_cost"])
             next_saturday = get_next_saturday()
+            delivery_line = (
+                f"🚗 {session['delivery_type']}"
+                if session["delivery_type"] != "איסוף עצמי"
+                else f"📍 איסוף עצמי — {BUSINESS_INFO['address']}"
+            )
             return (
                 f"{cart_text}\n\n"
                 f"👤 שם: {session['name']}\n"
                 f"📅 תאריך: שבת {next_saturday}\n"
-                f"🕗 שעת איסוף: {body}\n"
-                f"📍 {BUSINESS_INFO['address']}\n\n"
+                f"🕗 שעה: {body}\n"
+                f"{delivery_line}\n\n"
                 f"לאישור כתוב *אישור* ✅\n"
                 f"לביטול כתוב *ביטול* ❌"
             )
@@ -145,9 +207,10 @@ def handle_message(phone: str, body: str) -> str:
                     customer=customer,
                     cart=session["cart"],
                     pickup_time=session["pickup_time"],
+                    delivery_type=session["delivery_type"],
+                    delivery_cost=session["delivery_cost"],
                     db=db,
                 )
-
                 notify_gabriel(order, customer, session["cart"], db)
                 reset_session(phone)
 
@@ -155,9 +218,9 @@ def handle_message(phone: str, body: str) -> str:
                     f"✅ *ההזמנה שלך אושרה!*\n\n"
                     f"מספר הזמנה: #{order.id}\n"
                     f"📅 שבת {order.pickup_date}\n"
-                    f"🕗 שעת איסוף: {order.pickup_time}\n"
-                    f"💰 סה\"כ לתשלום: ₪{order.total_price:.0f}\n"
-                    f"📍 {BUSINESS_INFO['address']}\n\n"
+                    f"🕗 שעה: {order.pickup_time}\n"
+                    f"🚗 {order.delivery_type}\n"
+                    f"💰 סה\"כ: ₪{order.total_price:.0f}\n\n"
                     f"מחכים לך! ❤️🫓"
                 )
 

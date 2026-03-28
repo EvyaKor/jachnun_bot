@@ -41,7 +41,7 @@ def seed_menu():
                 MenuItem(
                     name="קובנייה",
                     description="קובנייה חלבית חמה וטרייה, מוגשת עם רסק, ביצה וסחוג",
-                    price=15.0,
+                    price=20.0,
                     is_dairy=True,
                     is_available=True,
                 ),

@@ -45,11 +45,13 @@ class Order(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
-    status = Column(String, default="ממתין")  # ממתין / אושר / בוטל
-    pickup_date = Column(String, nullable=True)   # תאריך שבת — נקבע אוטומטית
-    pickup_time = Column(String, nullable=True)   # שעת איסוף — נבחרת על ידי הלקוח
+    status = Column(String, default="ממתין")       # ממתין / אושר / בוטל
+    pickup_date = Column(String, nullable=True)    # תאריך שבת — נקבע אוטומטית
+    pickup_time = Column(String, nullable=True)    # שעת איסוף — נבחרת על ידי הלקוח
+    delivery_type = Column(String, default="איסוף עצמי")  # איסוף עצמי / הוד השרון / כפר סבא
+    delivery_cost = Column(Float, default=0.0)
     notes = Column(Text, nullable=True)
-    total_price = Column(Float, default=0.0)
+    total_price = Column(Float, default=0.0)       # כולל עלות משלוח
     created_at = Column(DateTime, default=datetime.utcnow)
 
     customer = relationship("Customer", back_populates="orders")

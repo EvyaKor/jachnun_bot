@@ -11,9 +11,10 @@ class ChatState(str, Enum):
     GREETING = "ברכה"
     BROWSING_MENU = "עיון_בתפריט"
     ADDING_ITEMS = "הוספת_פריטים"
-    CONFIRMING_ORDER = "אישור_הזמנה"
+    CHOOSING_DELIVERY = "בחירת_משלוח"
     AWAITING_NAME = "ממתין_לשם"
     AWAITING_PICKUP_TIME = "ממתין_לשעת_איסוף"
+    CONFIRMING_ORDER = "אישור_הזמנה"
     ORDER_PLACED = "הזמנה_בוצעה"
     CANCELLED = "בוטל"
 
@@ -31,9 +32,11 @@ def get_session(phone: str) -> dict:
     if phone not in sessions:
         sessions[phone] = {
             "state": ChatState.GREETING,
-            "cart": {},       # {menu_item_id: quantity}
+            "cart": {},            # {menu_item_id: quantity}
             "name": None,
             "pickup_time": None,
+            "delivery_type": None, # איסוף עצמי / הוד השרון / כפר סבא
+            "delivery_cost": 0.0,
         }
     return sessions[phone]
 
