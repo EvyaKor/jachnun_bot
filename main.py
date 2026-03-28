@@ -69,81 +69,132 @@ async def whatsapp_webhook(
 
 
 def _build_admin_html(grouped: dict, total: int, pending: int, revenue: int, next_sat: str, orders_closed: bool) -> str:
-    """בונה את ה-HTML של דשבורד האדמין כ-string ישיר — ללא Jinja2."""
+    """בונה את ה-HTML של דשבורד האדמין — מותאם מובייל, ללא Jinja2."""
 
-    status_colors = {"ממתין": "#856404;background:#fff3cd", "אושר": "#155724;background:#d1e7dd", "בוטל": "#721c24;background:#f8d7da"}
+    status_badge = {
+        "ממתין": "badge-pending",
+        "אושר": "badge-confirmed",
+        "בוטל": "badge-cancelled",
+    }
 
     orders_html = ""
     if not grouped:
-        orders_html = "<div style='text-align:center;color:#aaa;padding:40px'>אין הזמנות עדיין 🕊️</div>"
+        orders_html = "<div class='empty'>אין הזמנות עדיין 🕊️</div>"
     else:
         for saturday_date, orders in grouped.items():
-            orders_html += f"<div style='margin-bottom:32px'>"
-            orders_html += f"<div style='font-size:1.1rem;font-weight:bold;color:#c0392b;border-bottom:2px solid #c0392b;padding-bottom:8px;margin-bottom:12px'>📅 שבת {saturday_date} — {len(orders)} הזמנות</div>"
+            orders_html += f"""
+            <div class='week-group'>
+              <div class='week-header'>📅 שבת {saturday_date} — {len(orders)} הזמנות</div>"""
             for order in orders:
-                color = status_colors.get(order.status, "#000")
-                items_html = "".join(f"{oi.menu_item.name} x{oi.quantity}<br>" for oi in order.items)
+                badge = status_badge.get(order.status, "")
+                items_html = "".join(
+                    f"<span class='item-chip'>{oi.menu_item.name} ×{oi.quantity}</span>"
+                    for oi in order.items
+                )
                 delivery_icon = "🚗" if order.delivery_type != "איסוף עצמי" else "🏃"
-                confirm_btn = ""
+                address_row = f"<div class='detail-row'>📍 {order.delivery_address}</div>" if order.delivery_address else ""
+                action_btns = ""
                 if order.status == "ממתין":
-                    confirm_btn = f"""
-                        <form method='post' action='/admin/update/{order.id}' style='margin:0'>
-                            <input type='hidden' name='status' value='אושר'>
-                            <button style='padding:6px 14px;background:#198754;color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-weight:bold;width:80px;margin-bottom:4px'>✅ אשר</button>
-                        </form>
-                        <form method='post' action='/admin/update/{order.id}' style='margin:0'>
-                            <input type='hidden' name='status' value='בוטל'>
-                            <button style='padding:6px 14px;background:#dc3545;color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.8rem;font-weight:bold;width:80px'>❌ בטל</button>
-                        </form>"""
+                    action_btns = f"""
+                    <div class='action-row'>
+                      <form method='post' action='/admin/update/{order.id}'>
+                        <input type='hidden' name='status' value='אושר'>
+                        <button class='btn btn-confirm'>✅ אשר</button>
+                      </form>
+                      <form method='post' action='/admin/update/{order.id}'>
+                        <input type='hidden' name='status' value='בוטל'>
+                        <button class='btn btn-cancel'>❌ בטל</button>
+                      </form>
+                    </div>"""
                 orders_html += f"""
-                <div style='background:white;border-radius:10px;padding:16px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,0.06);display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap'>
-                    <div style='flex:1'>
-                        <div style='font-size:0.8rem;color:#aaa'>הזמנה #{order.id}</div>
-                        <div style='font-weight:bold'>{order.customer.name or 'לא צוין'}</div>
-                        <div style='font-size:0.85rem;color:#666'>📱 {order.customer.phone_number}</div>
-                        <div style='font-size:0.85rem;color:#444;margin-top:6px'>🕗 {order.pickup_time} | {delivery_icon} {order.delivery_type}</div>
-                        {'<div style=\'font-size:0.85rem;color:#444;margin-top:2px\'>📍 ' + order.delivery_address + '</div>' if order.delivery_address else ''}
-                        <div style='font-size:0.85rem;color:#444;margin-top:4px;line-height:1.6'>{items_html}</div>
-                        <div style='font-weight:bold;color:#c0392b'>💰 ₪{order.total_price:.0f}</div>
-                    </div>
-                    <div style='display:flex;flex-direction:column;align-items:center;gap:6px'>
-                        <span style='padding:4px 12px;border-radius:20px;font-size:0.8rem;font-weight:bold;color:{color}'>{order.status}</span>
-                        {confirm_btn}
-                    </div>
-                </div>"""
+              <div class='order-card'>
+                <div class='card-top'>
+                  <div class='order-meta'>
+                    <span class='order-num'>הזמנה #{order.id}</span>
+                    <span class='badge {badge}'>{order.status}</span>
+                  </div>
+                  <div class='customer-name'>{order.customer.name or 'לא צוין'}</div>
+                  <a class='phone-link' href='tel:{order.customer.phone_number}'>📱 {order.customer.phone_number}</a>
+                </div>
+                <div class='card-body'>
+                  <div class='detail-row'>🕗 {order.pickup_time} &nbsp;|&nbsp; {delivery_icon} {order.delivery_type}</div>
+                  {address_row}
+                  <div class='items-row'>{items_html}</div>
+                  <div class='total-row'>💰 ₪{order.total_price:.0f}</div>
+                </div>
+                {action_btns}
+              </div>"""
             orders_html += "</div>"
+
+    status_bar_cls = "status-open" if not orders_closed else "status-closed"
+    status_bar_txt = "🟢 הזמנות פתוחות — סוגרות שישי ב-11:00" if not orders_closed else "🔴 הזמנות סגורות (נפתחות ביום ראשון)"
 
     return f"""<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0"/>
+  <meta http-equiv="refresh" content="60"/>
   <title>ג'חנון אקספרס — ניהול</title>
-  <style>* {{box-sizing:border-box;margin:0;padding:0}} body {{font-family:'Segoe UI',Arial,sans-serif;background:#fff8f0;color:#2d2d2d;padding:20px}}</style>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#fff8f0;color:#2d2d2d;padding:12px;max-width:640px;margin:0 auto}}
+    .header{{background:#c0392b;color:white;padding:16px 18px;border-radius:14px;margin-bottom:12px;display:flex;align-items:center;gap:12px}}
+    .header-icon{{font-size:2rem;line-height:1}}
+    .header h1{{font-size:1.25rem;font-weight:700}}
+    .header p{{font-size:0.82rem;opacity:0.85;margin-top:2px}}
+    .status-bar{{border-radius:10px;padding:10px 14px;margin-bottom:14px;font-weight:600;font-size:0.88rem}}
+    .status-open{{background:#d1e7dd;border:1px solid #a3cfbb;color:#0a3622}}
+    .status-closed{{background:#fff3cd;border:1px solid #ffc107;color:#664d03}}
+    .stats{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px}}
+    .stat-card{{background:white;border-radius:12px;padding:14px 12px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.07)}}
+    .stat-num{{font-size:1.8rem;font-weight:700;color:#c0392b;line-height:1.1}}
+    .stat-label{{font-size:0.78rem;color:#888;margin-top:4px}}
+    .week-group{{margin-bottom:24px}}
+    .week-header{{font-size:1rem;font-weight:700;color:#c0392b;border-bottom:2px solid #c0392b;padding-bottom:8px;margin-bottom:10px}}
+    .order-card{{background:white;border-radius:14px;margin-bottom:10px;box-shadow:0 2px 10px rgba(0,0,0,0.07);overflow:hidden}}
+    .card-top{{padding:14px 14px 10px}}
+    .order-meta{{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}}
+    .order-num{{font-size:0.78rem;color:#aaa}}
+    .badge{{padding:3px 10px;border-radius:20px;font-size:0.78rem;font-weight:600}}
+    .badge-pending{{background:#fff3cd;color:#856404}}
+    .badge-confirmed{{background:#d1e7dd;color:#155724}}
+    .badge-cancelled{{background:#f8d7da;color:#721c24}}
+    .customer-name{{font-size:1.05rem;font-weight:700;margin-bottom:2px}}
+    .phone-link{{font-size:0.85rem;color:#c0392b;text-decoration:none;display:inline-block}}
+    .card-body{{padding:0 14px 12px;border-top:1px solid #f5f5f5;margin-top:10px;padding-top:10px}}
+    .detail-row{{font-size:0.85rem;color:#555;margin-bottom:4px}}
+    .items-row{{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}}
+    .item-chip{{background:#fff0e6;color:#c0392b;border-radius:20px;padding:3px 10px;font-size:0.82rem;font-weight:500}}
+    .total-row{{font-size:1rem;font-weight:700;color:#c0392b;margin-top:4px}}
+    .action-row{{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #f0f0f0}}
+    .action-row form{{margin:0}}
+    .btn{{width:100%;padding:14px 0;font-size:1rem;font-weight:700;border:none;cursor:pointer;letter-spacing:0.3px}}
+    .btn-confirm{{background:#198754;color:white}}
+    .btn-confirm:active{{background:#146c43}}
+    .btn-cancel{{background:#dc3545;color:white}}
+    .btn-cancel:active{{background:#b02a37}}
+    .empty{{text-align:center;color:#aaa;padding:48px 0;font-size:1rem}}
+    .refresh-note{{text-align:center;font-size:0.75rem;color:#bbb;margin-top:16px;padding-bottom:24px}}
+  </style>
 </head>
 <body>
-  <div style='background:#c0392b;color:white;padding:20px 24px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>
-    <div style='font-size:2rem'>🫓</div>
-    <div><h1 style='font-size:1.5rem'>ג'חנון אקספרס — לוח ניהול</h1><p style='font-size:0.9rem;opacity:0.85;margin-top:4px'>שלום גבריאל! כאן כל ההזמנות שלך</p></div>
+  <div class='header'>
+    <div class='header-icon'>🫓</div>
+    <div>
+      <h1>ג'חנון אקספרס</h1>
+      <p>שלום גבריאל! כאן כל ההזמנות שלך</p>
+    </div>
   </div>
-  <div style='background:{"#d1e7dd;border:1px solid #a3cfbb;color:#0a3622" if not orders_closed else "#fff3cd;border:1px solid #ffc107;color:#664d03"};border-radius:8px;padding:10px 16px;margin-bottom:16px;font-weight:bold;font-size:0.9rem'>
-    {"🟢 הזמנות פתוחות — סוגרות שישי ב-11:00" if not orders_closed else "🔴 הזמנות סגורות לשבת הקרובה (נפתחות ביום ראשון)"}
-  </div>
-  <div style='display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap'>
-    <div style='background:white;border-radius:10px;padding:16px 20px;flex:1;min-width:130px;box-shadow:0 2px 8px rgba(0,0,0,0.07);text-align:center'>
-      <div style='font-size:2rem;font-weight:bold;color:#c0392b'>{total}</div><div style='font-size:0.85rem;color:#888;margin-top:4px'>הזמנות בסה"כ</div>
-    </div>
-    <div style='background:white;border-radius:10px;padding:16px 20px;flex:1;min-width:130px;box-shadow:0 2px 8px rgba(0,0,0,0.07);text-align:center'>
-      <div style='font-size:2rem;font-weight:bold;color:#c0392b'>{pending}</div><div style='font-size:0.85rem;color:#888;margin-top:4px'>ממתינות לאישור</div>
-    </div>
-    <div style='background:white;border-radius:10px;padding:16px 20px;flex:1;min-width:130px;box-shadow:0 2px 8px rgba(0,0,0,0.07);text-align:center'>
-      <div style='font-size:2rem;font-weight:bold;color:#c0392b'>₪{revenue}</div><div style='font-size:0.85rem;color:#888;margin-top:4px'>הכנסה צפויה</div>
-    </div>
-    <div style='background:white;border-radius:10px;padding:16px 20px;flex:1;min-width:130px;box-shadow:0 2px 8px rgba(0,0,0,0.07);text-align:center'>
-      <div style='font-size:1.2rem;font-weight:bold;color:#c0392b'>{next_sat}</div><div style='font-size:0.85rem;color:#888;margin-top:4px'>שבת קרובה</div>
-    </div>
+  <div class='status-bar {status_bar_cls}'>{status_bar_txt}</div>
+  <div class='stats'>
+    <div class='stat-card'><div class='stat-num'>{total}</div><div class='stat-label'>הזמנות בסה"כ</div></div>
+    <div class='stat-card'><div class='stat-num'>{pending}</div><div class='stat-label'>ממתינות לאישור</div></div>
+    <div class='stat-card'><div class='stat-num'>₪{revenue}</div><div class='stat-label'>הכנסה צפויה</div></div>
+    <div class='stat-card'><div class='stat-num' style='font-size:1.1rem'>{next_sat}</div><div class='stat-label'>שבת קרובה</div></div>
   </div>
   {orders_html}
+  <div class='refresh-note'>מתרענן אוטומטית כל דקה</div>
 </body>
 </html>"""
 
