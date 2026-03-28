@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem
 from database.db import SessionLocal
 from state_machine import ChatState, get_session, get_state, set_state, reset_session, save_session
-from services.order_service import create_order, notify_gabriel, get_next_saturday
+from services.order_service import create_order, notify_gabriel, get_next_saturday, is_orders_closed
 
 GITHUB_RAW = "https://raw.githubusercontent.com/EvyaKor/jachnun_bot/main/images"
 PRODUCT_IMAGES = [
@@ -49,8 +49,12 @@ EMOJI_NUMBERS = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5�
 CANCEL_HINT = "\n\n_כתוב *ביטול* לביטול ההזמנה_"
 RESET_KEYWORDS = {"שלום", "התחל מחדש", "restart", "start", "היי", "הי", "hello", "hi"}
 
-# פקודות אדמין — זמינות רק לגבריאל
-ADMIN_PHONE = "+972539475881"
+ORDERS_CLOSED_MSG = (
+    "ההזמנות לשבת הקרובה נסגרו 🙏\n\n"
+    "ניתן ליצור קשר ישירות בטלפון לבדיקת זמינות:\n"
+    f"📱 *{GABRIEL_PAYMENT_PHONE}*\n\n"
+    "נשמח לראותכם בשבוע הבא! ❤️🫓"
+)
 
 
 # ── עזר: תפריט ──────────────────────────────────────────────
@@ -172,71 +176,6 @@ def is_valid_address(address: str) -> bool:
     return len(words) >= 2 and has_digit
 
 
-# ── פקודות אדמין ─────────────────────────────────────────────
-
-def handle_admin_command(phone: str, body: str, db) -> str | None:
-    """
-    מטפל בפקודות מנהל (רק לגבריאל).
-    מחזיר תשובה אם הפקודה זוהתה, None אחרת.
-
-    /sold_out [מספר]  — מסמן פריט כאזל
-    /restock [מספר]   — מחזיר פריט לתפריט
-    /stock            — מציג סטטוס כל הפריטים
-    """
-    if phone != ADMIN_PHONE:
-        return None
-
-    cmd = body.strip().lower()
-
-    if cmd == "/stock":
-        items = db.query(MenuItem).order_by(MenuItem.id).all()
-        lines = ["📦 *סטטוס מלאי:*\n"]
-        for i, item in enumerate(items, 1):
-            status = "✅ זמין" if item.is_available else "❌ אזל"
-            lines.append(f"{i}. {item.name} — {status}")
-        lines.append("\n/sold_out [מספר] — לסגירה")
-        lines.append("/restock [מספר] — להחזרה")
-        return "\n".join(lines)
-
-    if cmd.startswith("/sold_out"):
-        parts = body.strip().split(maxsplit=1)
-        item = _find_item_by_number_or_name(parts[1] if len(parts) > 1 else None, db)
-        if not item:
-            return "לא הבנתי את הפריט. שלח /stock לראות את הרשימה."
-        item.is_available = False
-        db.commit()
-        return f"❌ *{item.name}* סומן כאזל מהמלאי.\nלקוחות לא יוכלו להזמין אותו עד שתחזיר אותו."
-
-    if cmd.startswith("/restock"):
-        parts = body.strip().split(maxsplit=1)
-        item = _find_item_by_number_or_name(parts[1] if len(parts) > 1 else None, db)
-        if not item:
-            return "לא הבנתי את הפריט. שלח /stock לראות את הרשימה."
-        item.is_available = True
-        db.commit()
-        return f"✅ *{item.name}* זמין שוב בתפריט!"
-
-    return None
-
-
-def _find_item_by_number_or_name(query: str | None, db) -> MenuItem | None:
-    """מוצא פריט תפריט לפי מספר סידורי (1,2,3...) או שם חלקי."""
-    if not query:
-        return None
-    all_items = db.query(MenuItem).order_by(MenuItem.id).all()
-    # חיפוש לפי מספר
-    if query.isdigit():
-        idx = int(query) - 1
-        if 0 <= idx < len(all_items):
-            return all_items[idx]
-    # חיפוש לפי שם חלקי
-    query_lower = query.strip().lower()
-    for item in all_items:
-        if query_lower in item.name.lower():
-            return item
-    return None
-
-
 # ── הטיפול הראשי ─────────────────────────────────────────────
 
 def handle_message(phone: str, body: str) -> str:
@@ -251,16 +190,13 @@ def handle_message(phone: str, body: str) -> str:
 
     try:
 
-        # ════ פקודות אדמין — בעדיפות עליונה ════
-        admin_reply = handle_admin_command(phone, body, db)
-        if admin_reply is not None:
-            return admin_reply
-
         # ════ פקודות גלובליות — עובדות מכל מצב ════
 
         # איפוס מלא + ברכה מחדש
         if body in RESET_KEYWORDS and state not in (ChatState.GREETING,):
             reset_session(phone)
+            if is_orders_closed():
+                return ORDERS_CLOSED_MSG
             set_state(phone, ChatState.ADDING_ITEMS)
             return build_welcome_with_menu(db)
 
@@ -271,6 +207,8 @@ def handle_message(phone: str, body: str) -> str:
 
         # ════ GREETING — הודעה ראשונה ════
         if state == ChatState.GREETING:
+            if is_orders_closed():
+                return ORDERS_CLOSED_MSG
             set_state(phone, ChatState.ADDING_ITEMS)
             return build_welcome_with_menu(db)
 

@@ -41,14 +41,19 @@ PHONE = "+972500000001"
 
 @pytest.fixture(autouse=True)
 def setup():
-    """אתחול מסד נתונים ואיפוס session לפני כל בדיקה."""
+    """אתחול מסד נתונים ואיפוס session לפני כל בדיקה.
+    מפטח is_orders_closed=False כברירת מחדל כדי שבדיקות לא יהיו תלויות ביום השבוע האמיתי."""
     from database.models import Base
     from database.db import engine
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     seed_menu()
     reset_session(PHONE)
-    yield
+    # מפטח רק את הייבוא ב-message_handler כדי שבדיקות לא יהיו תלויות ביום השבוע האמיתי.
+    # בדיקות שבודקות את is_orders_closed ישירות (services) עדיין מקבלות את הפונקציה האמיתית
+    # ומפטחות את datetime בנפרד.
+    with patch("handlers.message_handler.is_orders_closed", return_value=False):
+        yield
     reset_session(PHONE)
 
 
@@ -2071,80 +2076,85 @@ class TestSelfPickupSummary:
 
 
 # ============================================================
-# 18. בדיקות פקודות אדמין (מלאי)
+# 18. בדיקות קציר הזמנות אוטומטי (שישי 11:00)
 # ============================================================
 
-ADMIN_PHONE = "+972539475881"
+class TestOrderCutoff:
 
+    def test_orders_open_on_thursday(self):
+        """ביום חמישי ההזמנות פתוחות."""
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.weekday.return_value = 3   # חמישי
+            mock_dt.now.return_value.hour = 15
+            from services.order_service import is_orders_closed
+            assert is_orders_closed() is False
 
-class TestAdminCommands:
+    def test_orders_open_friday_before_11(self):
+        """ביום שישי לפני 11:00 ההזמנות פתוחות."""
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.weekday.return_value = 4   # שישי
+            mock_dt.now.return_value.hour = 10
+            from services.order_service import is_orders_closed
+            assert is_orders_closed() is False
 
-    def test_stock_command_shows_all_items(self):
-        """/stock מציג את כל פריטי התפריט."""
-        reply = handle_message(ADMIN_PHONE, "/stock")
-        assert "ג'חנון" in reply
-        assert "קובנייה" in reply
-        assert "ביצה נוספת" in reply
+    def test_orders_closed_friday_after_11(self):
+        """ביום שישי אחרי 11:00 ההזמנות סגורות."""
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.weekday.return_value = 4   # שישי
+            mock_dt.now.return_value.hour = 11
+            from services.order_service import is_orders_closed
+            assert is_orders_closed() is True
 
-    def test_sold_out_by_number(self):
-        """/sold_out 1 מסמן את הפריט הראשון כאזל."""
-        reply = handle_message(ADMIN_PHONE, "/sold_out 1")
-        assert "ג'חנון" in reply
-        assert "❌" in reply
-        db = SessionLocal()
-        item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
-        db.close()
-        assert item.is_available is False
+    def test_orders_closed_saturday(self):
+        """ביום שבת ההזמנות סגורות."""
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.weekday.return_value = 5   # שבת
+            mock_dt.now.return_value.hour = 9
+            from services.order_service import is_orders_closed
+            assert is_orders_closed() is True
 
-    def test_sold_out_by_name(self):
-        """/sold_out קובנייה מסמן לפי שם."""
-        reply = handle_message(ADMIN_PHONE, "/sold_out קובנייה")
-        assert "קובנייה" in reply
-        assert "❌" in reply
-        db = SessionLocal()
-        item = db.query(MenuItem).filter(MenuItem.name == "קובנייה").first()
-        db.close()
-        assert item.is_available is False
+    def test_orders_open_sunday(self):
+        """ביום ראשון ההזמנות נפתחות מחדש."""
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.weekday.return_value = 6   # ראשון
+            mock_dt.now.return_value.hour = 8
+            from services.order_service import is_orders_closed
+            assert is_orders_closed() is False
 
-    def test_restock_restores_item(self):
-        """/restock מחזיר פריט אזול לתפריט."""
-        handle_message(ADMIN_PHONE, "/sold_out 1")
-        reply = handle_message(ADMIN_PHONE, "/restock 1")
-        assert "ג'חנון" in reply
-        assert "✅" in reply
-        db = SessionLocal()
-        item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
-        db.close()
-        assert item.is_available is True
+    def test_closed_message_on_greeting_when_cutoff(self):
+        """כשההזמנות סגורות, הודעת ברכה מחזירה הודעת סגירה."""
+        with patch("handlers.message_handler.is_orders_closed", return_value=True):
+            reply = handle_message(PHONE, "היי")
+        assert "נסגרו" in reply
+        assert "טלפון" in reply
 
-    def test_sold_out_item_removed_from_menu(self):
-        """פריט שאזל לא מופיע בתפריט ולא ניתן להזמינו."""
-        handle_message(ADMIN_PHONE, "/sold_out 1")  # ג'חנון אזל
-        reply = handle_message(PHONE, "היי")
-        assert "קובנייה" in reply
-        # "1️⃣ ג'חנון" (שורת הפריט) לא אמורה להופיע — שם העסק "ג'חנון אקספרס" עדיין בהודעת הברכה
-        assert "1️⃣ ג'חנון" not in reply
+    def test_open_message_on_greeting_when_open(self):
+        """כשההזמנות פתוחות, הודעת ברכה מחזירה את התפריט."""
+        reply = handle_message(PHONE, "היי")  # fixture כבר מפטח is_orders_closed=False
+        assert "ג'חנון אקספרס" in reply
+        assert "1️⃣" in reply
 
-    def test_non_admin_cannot_use_stock_command(self):
-        """לקוח רגיל לא יכול להשתמש בפקודות אדמין."""
-        reply = handle_message(PHONE, "/stock")
-        # הבוט לא מזהה את הפקודה — מחזיר הודעת עזרה רגילה
-        assert "לא הבנתי" in reply or "ג'חנון" in reply  # ברכה או שגיאה, לא תוצאת /stock
+    def test_closed_message_on_reset_when_cutoff(self):
+        """כשההזמנות סגורות, איפוס שיחה מחזיר הודעת סגירה."""
+        handle_message(PHONE, "היי")   # פתח שיחה
+        handle_message(PHONE, "1")     # הוסף פריט
+        with patch("handlers.message_handler.is_orders_closed", return_value=True):
+            reply = handle_message(PHONE, "שלום")
+        assert "נסגרו" in reply
 
-    def test_sold_out_unknown_item(self):
-        """/sold_out עם שם שלא קיים מחזיר הודעת שגיאה."""
-        reply = handle_message(ADMIN_PHONE, "/sold_out פלאפל")
-        assert "לא הבנתי" in reply
+    def test_session_not_started_when_closed(self):
+        """כשסגור, המצב לא עובר ל-ADDING_ITEMS."""
+        with patch("handlers.message_handler.is_orders_closed", return_value=True):
+            handle_message(PHONE, "היי")
+        assert get_state(PHONE) == ChatState.GREETING
 
-    def test_admin_command_does_not_advance_state(self):
-        """פקודת אדמין לא מעדכנת את מצב השיחה של גבריאל."""
-        handle_message(ADMIN_PHONE, "/stock")
-        state = get_state(ADMIN_PHONE)
-        assert state == ChatState.GREETING or state == ChatState.ADDING_ITEMS
-
-    def test_stock_shows_availability_status(self):
-        """/stock מציג ✅ ל-זמין ו-❌ לאזל."""
-        handle_message(ADMIN_PHONE, "/sold_out 1")
-        reply = handle_message(ADMIN_PHONE, "/stock")
-        assert "❌" in reply  # ג'חנון אזל
-        assert "✅" in reply  # שאר הפריטים זמינים
+    def test_in_progress_order_not_blocked(self):
+        """הזמנה שכבר התחילה לפני הקציר יכולה להסתיים."""
+        handle_message(PHONE, "היי")   # fixture=False, פותח רגיל
+        handle_message(PHONE, "1")
+        # ממשיך כשסגור
+        with patch("handlers.message_handler.is_orders_closed", return_value=True):
+            reply = handle_message(PHONE, "סיום")
+        # לא מקבל הודעת סגירה — ממשיך לבחירת משלוח
+        assert "נסגרו" not in reply
+        assert get_state(PHONE) == ChatState.CHOOSING_DELIVERY

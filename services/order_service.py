@@ -21,6 +21,21 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 
+def is_orders_closed() -> bool:
+    """
+    מחזיר True אם ההזמנות סגורות לשבת הקרובה.
+    ההזמנות נסגרות אוטומטית ביום שישי בשעה 11:00 (שעון ישראל)
+    ונשארות סגורות כל יום שבת. נפתחות מחדש ביום ראשון.
+    """
+    now = datetime.now(ISRAEL_TZ)
+    weekday = now.weekday()  # 0=שני, 4=שישי, 5=שבת, 6=ראשון
+    if weekday == 4 and now.hour >= 11:  # שישי אחרי 11:00
+        return True
+    if weekday == 5:  # שבת — כל היום
+        return True
+    return False
+
+
 def get_next_saturday() -> str:
     """
     מחשב את תאריך השבת הקרובה לפי שעון ישראל (Asia/Jerusalem).

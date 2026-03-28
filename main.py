@@ -12,7 +12,7 @@ from database.models import Order, OrderItem
 from sqlalchemy.orm import joinedload
 from handlers.message_handler import handle_message, PRODUCT_IMAGES
 from state_machine import get_state, ChatState
-from services.order_service import get_next_saturday
+from services.order_service import get_next_saturday, is_orders_closed
 from collections import defaultdict
 import asyncio
 import httpx
@@ -68,7 +68,7 @@ async def whatsapp_webhook(
     return Response(content=str(response), media_type="application/xml")
 
 
-def _build_admin_html(grouped: dict, total: int, pending: int, revenue: int, next_sat: str) -> str:
+def _build_admin_html(grouped: dict, total: int, pending: int, revenue: int, next_sat: str, orders_closed: bool) -> str:
     """בונה את ה-HTML של דשבורד האדמין כ-string ישיר — ללא Jinja2."""
 
     status_colors = {"ממתין": "#856404;background:#fff3cd", "אושר": "#155724;background:#d1e7dd", "בוטל": "#721c24;background:#f8d7da"}
@@ -122,9 +122,12 @@ def _build_admin_html(grouped: dict, total: int, pending: int, revenue: int, nex
   <style>* {{box-sizing:border-box;margin:0;padding:0}} body {{font-family:'Segoe UI',Arial,sans-serif;background:#fff8f0;color:#2d2d2d;padding:20px}}</style>
 </head>
 <body>
-  <div style='background:#c0392b;color:white;padding:20px 24px;border-radius:12px;margin-bottom:24px;display:flex;align-items:center;gap:12px'>
+  <div style='background:#c0392b;color:white;padding:20px 24px;border-radius:12px;margin-bottom:16px;display:flex;align-items:center;gap:12px'>
     <div style='font-size:2rem'>🫓</div>
     <div><h1 style='font-size:1.5rem'>ג'חנון אקספרס — לוח ניהול</h1><p style='font-size:0.9rem;opacity:0.85;margin-top:4px'>שלום גבריאל! כאן כל ההזמנות שלך</p></div>
+  </div>
+  <div style='background:{"#d1e7dd;border:1px solid #a3cfbb;color:#0a3622" if not orders_closed else "#fff3cd;border:1px solid #ffc107;color:#664d03"};border-radius:8px;padding:10px 16px;margin-bottom:16px;font-weight:bold;font-size:0.9rem'>
+    {"🟢 הזמנות פתוחות — סוגרות שישי ב-11:00" if not orders_closed else "🔴 הזמנות סגורות לשבת הקרובה (נפתחות ביום ראשון)"}
   </div>
   <div style='display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap'>
     <div style='background:white;border-radius:10px;padding:16px 20px;flex:1;min-width:130px;box-shadow:0 2px 8px rgba(0,0,0,0.07);text-align:center'>
@@ -173,6 +176,7 @@ def admin_dashboard():
             pending=pending,
             revenue=int(revenue),
             next_sat=get_next_saturday(),
+            orders_closed=is_orders_closed(),
         )
         return HTMLResponse(content=html)
     finally:
