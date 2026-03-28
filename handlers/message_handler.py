@@ -146,6 +146,10 @@ def handle_message(phone: str, body: str) -> str:
 
         # ---- מצב: בחירת סוג משלוח ----
         if state == ChatState.CHOOSING_DELIVERY:
+            if body == "חזור":
+                set_state(phone, ChatState.ADDING_ITEMS)
+                return MENU_TEXT + "\n\nהמשך להוסיף פריטים וכתוב *סיום* בסיום:"
+
             if body not in DELIVERY_OPTIONS:
                 return "כתוב *1* לאיסוף עצמי, *2* למשלוח להוד השרון, או *3* למשלוח לכפר סבא."
 
