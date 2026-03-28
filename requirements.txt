@@ -7,3 +7,4 @@ python-dotenv
 anthropic
 jinja2
 python-multipart
+httpx

@@ -13,16 +13,38 @@ from database.models import Order, Customer
 from handlers.message_handler import handle_message
 from services.order_service import get_next_saturday
 from collections import defaultdict
+import asyncio
+import httpx
+import os
 
 app = FastAPI(title="ג'חנון אקספרס", version="1.0.0")
 templates = Jinja2Templates(directory="templates")
 
 
+async def keep_alive():
+    """
+    שולח ping לשרת עצמו כל 14 דקות כדי למנוע שינה ב-Render.
+    פועל כ-background task לאורך כל חיי האפליקציה.
+    """
+    url = os.getenv("RENDER_EXTERNAL_URL")
+    if not url:
+        return  # לא בסביבת Render — לא נדרש
+    await asyncio.sleep(60)  # המתן דקה אחת לאחר האתחול
+    while True:
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(f"{url}/", timeout=10)
+        except Exception:
+            pass
+        await asyncio.sleep(14 * 60)  # כל 14 דקות
+
+
 @app.on_event("startup")
-def startup():
-    """אתחול מסד הנתונים וזריעת התפריט בעת הפעלת השרת."""
+async def startup():
+    """אתחול מסד הנתונים, זריעת התפריט, והפעלת ה-keep-alive."""
     init_db()
     seed_menu()
+    asyncio.create_task(keep_alive())
 
 
 @app.get("/")
