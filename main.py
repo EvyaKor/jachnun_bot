@@ -5,7 +5,7 @@
 """
 
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import PlainTextResponse, HTMLResponse
+from fastapi.responses import Response, HTMLResponse
 from fastapi.templating import Jinja2Templates
 from twilio.twiml.messaging_response import MessagingResponse
 from database.db import init_db, seed_menu, SessionLocal
@@ -53,7 +53,7 @@ def root():
     return {"status": "פעיל", "service": "ג'חנון אקספרס 🫓"}
 
 
-@app.post("/webhook", response_class=PlainTextResponse)
+@app.post("/webhook")
 async def whatsapp_webhook(
     From: str = Form(...),
     Body: str = Form(...),
@@ -67,7 +67,7 @@ async def whatsapp_webhook(
     reply = handle_message(phone, body)
     response = MessagingResponse()
     response.message(reply)
-    return str(response)
+    return Response(content=str(response), media_type="application/xml")
 
 
 @app.get("/admin", response_class=HTMLResponse)
