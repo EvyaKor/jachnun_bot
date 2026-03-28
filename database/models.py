@@ -11,7 +11,7 @@ Base = declarative_base()
 
 
 class Customer(Base):
-    """לקוח רשום במערכת."""
+    """לקוח רשום במערכת — כולל מצב שיחה נוכחי ונתוני הזמנה זמניים."""
 
     __tablename__ = "customers"
 
@@ -20,11 +20,15 @@ class Customer(Base):
     name = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # מכונת מצבים מבוססת DB — נשמרת בין הפעלות שרת
+    current_state = Column(String, default="ברכה")
+    temp_order_data = Column(Text, nullable=True)  # JSON עם נתוני הזמנה זמניים
+
     orders = relationship("Order", back_populates="customer")
 
 
 class MenuItem(Base):
-    """פריט תפריט."""
+    """פריט תפריט — מנה עיקרית או תוספת."""
 
     __tablename__ = "menu_items"
 
@@ -34,6 +38,7 @@ class MenuItem(Base):
     price = Column(Float, nullable=False)
     is_dairy = Column(Boolean, default=False)
     is_available = Column(Boolean, default=True)
+    is_extra = Column(Boolean, default=False)  # True = תוספת (לא מנה עיקרית)
 
     order_items = relationship("OrderItem", back_populates="menu_item")
 
@@ -48,11 +53,11 @@ class Order(Base):
     status = Column(String, default="ממתין")       # ממתין / אושר / בוטל
     pickup_date = Column(String, nullable=True)    # תאריך שבת — נקבע אוטומטית
     pickup_time = Column(String, nullable=True)    # שעת איסוף — נבחרת על ידי הלקוח
-    delivery_type = Column(String, default="איסוף עצמי")  # איסוף עצמי / הוד השרון / כפר סבא
+    delivery_type = Column(String, default="איסוף עצמי")
     delivery_cost = Column(Float, default=0.0)
-    delivery_address = Column(String, nullable=True)  # כתובת משלוח — ריק באיסוף עצמי
+    delivery_address = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
-    total_price = Column(Float, default=0.0)       # כולל עלות משלוח
+    total_price = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     customer = relationship("Customer", back_populates="orders")

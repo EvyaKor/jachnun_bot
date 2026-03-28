@@ -1,12 +1,12 @@
 """
 מטפל בהודעות נכנסות מוואטסאפ ומנתב אותן לפי מצב השיחה.
-כל לוגיקת השיחה עוברת דרך כאן.
+תפריט דינמי מ-DB, מכונת מצבים חסינה, ביטול גלובלי בכל שלב.
 """
 
 from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem
 from database.db import SessionLocal
-from state_machine import ChatState, get_session, get_state, set_state, reset_session
+from state_machine import ChatState, get_session, get_state, set_state, reset_session, save_session
 from services.order_service import create_order, notify_gabriel, get_next_saturday
 
 GITHUB_RAW = "https://raw.githubusercontent.com/EvyaKor/jachnun_bot/main/images"
@@ -33,27 +33,7 @@ DELIVERY_OPTIONS = {
 
 DELIVERY_MIN = 70.0
 
-MENU_TEXT = (
-    "📋 *התפריט שלנו:*\n\n"
-    "1️⃣ ג'חנון (פרווה) — ₪25\n"
-    "   מוגש עם רסק, ביצה וסחוג 🍅🥚\n\n"
-    "2️⃣ קובנייה (חלבי) — ₪20\n"
-    "   מוגשת עם רסק, ביצה וסחוג 🍅🥚\n\n"
-    "כתוב *1* להזמין ג'חנון\n"
-    "כתוב *2* להזמין קובנייה\n"
-    "כתוב *סיום* לסיים את ההזמנה\n"
-    "כתוב *ביטול* לביטול ההזמנה"
-)
-
-WELCOME_TEXT = (
-    "שלום וברוכים הבאים לג'חנון אקספרס! 🎉\n\n"
-    "ג'חנונים וקובניות טריים וחמים שלא תוכלו להפסיק ללקק את האצבעות 😁\n\n"
-    "📍 {address}\n"
-    "🕗 {days} מ-{pickup_from}\n\n"
-    "כתוב *הזמנה* להתחיל להזמין"
-).format(**BUSINESS_INFO)
-
-# מצבים שבהם יש הזמנה פעילה — ביטול רלוונטי
+# מצבים שבהם הזמנה פעילה — ביטול רלוונטי
 ACTIVE_ORDER_STATES = {
     ChatState.ADDING_ITEMS,
     ChatState.CHOOSING_DELIVERY,
@@ -64,34 +44,80 @@ ACTIVE_ORDER_STATES = {
     ChatState.CHOOSING_PAYMENT,
 }
 
-# הודעות עזרה לפי מצב
-STATE_HINTS = {
-    ChatState.BROWSING_MENU: "כתוב *הזמנה* להתחיל להזמין.",
-    ChatState.ADDING_ITEMS: "כתוב *1* לג'חנון, *2* לקובנייה, *סיום* לסיים, *ביטול* לביטול.",
-    ChatState.CHOOSING_DELIVERY: "כתוב *1*, *2* או *3* לבחירת אופן קבלה, או *חזור* לסל.",
-    ChatState.AWAITING_ADDRESS: "כתוב את הכתובת המלאה למשלוח.",
-    ChatState.AWAITING_NAME: "כתוב את שמך לצורך ההזמנה.",
-    ChatState.AWAITING_PICKUP_TIME: "כתוב את השעה הרצויה (למשל: 09:00).",
-    ChatState.CONFIRMING_ORDER: "כתוב *אישור* לאישור ההזמנה, או *ביטול* לביטול.",
-    ChatState.CHOOSING_PAYMENT: "כתוב *1* למזומן, *2* לביט, *3* לפייבוקס.",
-}
+EMOJI_NUMBERS = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣"}
 
-RESET_KEYWORDS = {"שלום", "התחל מחדש", "restart", "start"}
+CANCEL_HINT = "\n\n_כתוב *ביטול* לביטול ההזמנה_"
+RESET_KEYWORDS = {"שלום", "התחל מחדש", "restart", "start", "היי", "הי", "hello", "hi"}
 
 
-def get_or_create_customer(phone: str, db: Session) -> Customer:
-    """מחזיר לקוח קיים או יוצר חדש לפי מספר הטלפון."""
-    customer = db.query(Customer).filter(Customer.phone_number == phone).first()
-    if not customer:
-        customer = Customer(phone_number=phone)
-        db.add(customer)
-        db.commit()
-        db.refresh(customer)
-    return customer
+# ── עזר: תפריט ──────────────────────────────────────────────
 
+def get_ordered_items(db: Session) -> list:
+    """מחזיר פריטי תפריט זמינים לפי סדר: מנות עיקריות, אחר כך תוספות."""
+    mains = (
+        db.query(MenuItem)
+        .filter(MenuItem.is_available == True, MenuItem.is_extra == False)
+        .order_by(MenuItem.id)
+        .all()
+    )
+    extras = (
+        db.query(MenuItem)
+        .filter(MenuItem.is_available == True, MenuItem.is_extra == True)
+        .order_by(MenuItem.id)
+        .all()
+    )
+    return mains + extras
+
+
+def get_item_by_number(number: str, db: Session):
+    """מחזיר פריט לפי מספרו בתפריט (1, 2, 3, ...). None אם לא קיים."""
+    items = get_ordered_items(db)
+    item_map = {str(i + 1): item for i, item in enumerate(items)}
+    return item_map.get(number)
+
+
+def build_menu_text(db: Session) -> str:
+    """בונה את טקסט התפריט דינמית מה-DB."""
+    items = get_ordered_items(db)
+    mains = [i for i in items if not i.is_extra]
+    extras = [i for i in items if i.is_extra]
+
+    lines = ["📋 *מה נכין לכם היום?*\n"]
+
+    for idx, item in enumerate(mains, 1):
+        dairy = " (חלבי)" if item.is_dairy else " (פרווה)"
+        lines.append(f"{EMOJI_NUMBERS[idx]} {item.name}{dairy} — ₪{item.price:.0f}")
+        lines.append(f"   עם ביצה, רסק עגניות וסחוג 🍅🥚\n")
+
+    if extras:
+        lines.append("➕ *תוספות:*")
+        offset = len(mains)
+        for idx, item in enumerate(extras, 1):
+            lines.append(f"{EMOJI_NUMBERS[offset + idx]} {item.name} — ₪{item.price:.0f}")
+
+    lines.append("\n*כתוב מספר להוסיף לסל*")
+    lines.append("*סיום* — לסיום הבחירה")
+    lines.append("*ביטול* — לביטול ההזמנה")
+
+    return "\n".join(lines)
+
+
+def build_welcome_with_menu(db: Session) -> str:
+    """הודעת ברוכים הבאים + תפריט מלא."""
+    next_sat = get_next_saturday()
+    header = (
+        f"ברוכים הבאים לג'חנון אקספרס! ☀️🫓\n\n"
+        f"ג'חנונים וקובניות טריים, חמים ומפנקים 😍\n"
+        f"📍 {BUSINESS_INFO['address']}\n"
+        f"🗓️ ההזמנה תהיה לשבת *{next_sat}*\n\n"
+    )
+    return header + build_menu_text(db)
+
+
+# ── עזר: סל קניות ───────────────────────────────────────────
 
 def cart_subtotal(cart: dict, db: Session) -> float:
-    """מחשב את סכום הסל ללא משלוח."""
+    """מחשב סכום סל ללא משלוח."""
     total = 0.0
     for item_id, qty in cart.items():
         item = db.query(MenuItem).filter(MenuItem.id == item_id).first()
@@ -101,7 +127,7 @@ def cart_subtotal(cart: dict, db: Session) -> float:
 
 
 def format_cart(cart: dict, db: Session, delivery_cost: float = 0.0) -> str:
-    """מחזיר תיאור טקסטואלי של סל הקניות הנוכחי."""
+    """מחזיר תיאור טקסטואלי של הסל."""
     if not cart:
         return "הסל שלך ריק."
     lines = ["🛒 *הסל שלך:*"]
@@ -118,10 +144,25 @@ def format_cart(cart: dict, db: Session, delivery_cost: float = 0.0) -> str:
     return "\n".join(lines)
 
 
+# ── עזר: לקוח ───────────────────────────────────────────────
+
+def get_or_create_customer(phone: str, db: Session) -> Customer:
+    """מחזיר לקוח קיים או יוצר חדש."""
+    customer = db.query(Customer).filter(Customer.phone_number == phone).first()
+    if not customer:
+        customer = Customer(phone_number=phone)
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+    return customer
+
+
+# ── הטיפול הראשי ─────────────────────────────────────────────
+
 def handle_message(phone: str, body: str) -> str:
     """
-    נקודת הכניסה הראשית לטיפול בהודעה נכנסת.
-    מקבל מספר טלפון וגוף ההודעה, מחזיר תשובה בעברית.
+    נקודת הכניסה לטיפול בהודעה נכנסת.
+    מחזיר תשובה בעברית.
     """
     body = body.strip()
     state = get_state(phone)
@@ -129,127 +170,161 @@ def handle_message(phone: str, body: str) -> str:
     db = SessionLocal()
 
     try:
-        # ---- פקודות גלובליות — עובדות מכל מצב ----
 
-        # איפוס מלא
-        if body in RESET_KEYWORDS:
+        # ════ פקודות גלובליות — עובדות מכל מצב ════
+
+        # איפוס מלא + ברכה מחדש
+        if body in RESET_KEYWORDS and state not in (ChatState.GREETING,):
             reset_session(phone)
-            set_state(phone, ChatState.BROWSING_MENU)
-            return WELCOME_TEXT
+            set_state(phone, ChatState.ADDING_ITEMS)
+            return build_welcome_with_menu(db)
 
-        # ביטול הזמנה פעילה מכל שלב
+        # ביטול הזמנה פעילה
         if body == "ביטול" and state in ACTIVE_ORDER_STATES:
             reset_session(phone)
-            return "ההזמנה בוטלה ✅\n\nכתוב *הזמנה* כדי להתחיל מחדש."
+            return "ההזמנה בוטלה ✅\n\nכתוב *הזמנה* או *שלום* להתחיל מחדש."
 
-        # ---- מצב: ברכה ראשונית ----
+        # ════ GREETING — הודעה ראשונה ════
         if state == ChatState.GREETING:
-            set_state(phone, ChatState.BROWSING_MENU)
-            return WELCOME_TEXT
+            set_state(phone, ChatState.ADDING_ITEMS)
+            return build_welcome_with_menu(db)
 
-        # ---- מצב: עיון בתפריט ----
+        # תאימות לאחור — BROWSING_MENU מתנהג כמו ADDING_ITEMS
         if state == ChatState.BROWSING_MENU:
+            set_state(phone, ChatState.ADDING_ITEMS)
+            state = ChatState.ADDING_ITEMS
+
+        # ════ ADDING_ITEMS — בחירת פריטים ════
+        if state == ChatState.ADDING_ITEMS:
+
+            # הצגת תפריט מחדש (ללא איבוד סל)
             if body in ["תפריט", "menu", "הזמנה"]:
-                set_state(phone, ChatState.ADDING_ITEMS)
+                cart_text = format_cart(session["cart"], db)
+                prefix = f"{cart_text}\n\n" if session["cart"] else ""
+                return prefix + build_menu_text(db)
+
+            # הוספת פריט לסל לפי מספר
+            item = get_item_by_number(body, db)
+            if item:
+                session["cart"][item.id] = session["cart"].get(item.id, 0) + 1
+                save_session(phone)
+                emoji = "✅"
                 return (
-                    f"מעולה! ההזמנה תהיה לשבת ה-{get_next_saturday()} 📅\n\n"
-                    + MENU_TEXT
+                    f"{emoji} *{item.name}* נוסף לסל!\n\n"
+                    f"{format_cart(session['cart'], db)}\n\n"
+                    f"המשך לבחור פריטים, או כתוב *סיום* להמשך"
+                    f"{CANCEL_HINT}"
                 )
 
-        # ---- מצב: הוספת פריטים לסל ----
-        if state == ChatState.ADDING_ITEMS:
-            # הצגת תפריט מחדש מבלי לאבד את הסל
-            if body in ["תפריט", "menu"]:
-                cart_text = format_cart(session["cart"], db) if session["cart"] else ""
-                prefix = f"{cart_text}\n\n" if cart_text and cart_text != "הסל שלך ריק." else ""
-                return prefix + MENU_TEXT
-
-            if body == "1":
-                item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
-                if item:
-                    session["cart"][item.id] = session["cart"].get(item.id, 0) + 1
-                return f"✅ ג'חנון נוסף לסל!\n\n{format_cart(session['cart'], db)}\n\nהמשך להוסיף פריטים או כתוב *סיום*"
-
-            if body == "2":
-                item = db.query(MenuItem).filter(MenuItem.name == "קובנייה").first()
-                if item:
-                    session["cart"][item.id] = session["cart"].get(item.id, 0) + 1
-                return f"✅ קובנייה נוספה לסל!\n\n{format_cart(session['cart'], db)}\n\nהמשך להוסיף פריטים או כתוב *סיום*"
-
+            # סיום בחירה
             if body == "סיום":
                 if not session["cart"]:
-                    return "הסל שלך ריק. כתוב *1* או *2* כדי להוסיף פריטים."
+                    return f"הסל שלך ריק 🛒\n\nכתוב מספר להוסיף פריט:{CANCEL_HINT}"
                 set_state(phone, ChatState.CHOOSING_DELIVERY)
                 subtotal = cart_subtotal(session["cart"], db)
-                delivery_note = ""
-                if subtotal < DELIVERY_MIN:
-                    delivery_note = f"\n\n_⚠️ משלוח זמין בהזמנה מעל ₪{DELIVERY_MIN:.0f} בלבד_"
+                delivery_note = (
+                    f"\n\n_⚠️ משלוח זמין מהזמנה מעל ₪{DELIVERY_MIN:.0f} בלבד_"
+                    if subtotal < DELIVERY_MIN else ""
+                )
                 return (
                     f"{format_cart(session['cart'], db)}\n\n"
-                    f"איך תרצה לקבל את ההזמנה? 🚗\n\n"
+                    f"📦 *איך תרצו לקבל את ההזמנה?*\n\n"
                     f"1️⃣ איסוף עצמי (חינם)\n"
                     f"   📍 {BUSINESS_INFO['address']}\n\n"
                     f"2️⃣ משלוח להוד השרון — ₪15\n"
                     f"3️⃣ משלוח לכפר סבא — ₪25"
-                    + delivery_note
+                    f"{delivery_note}"
+                    f"{CANCEL_HINT}"
                 )
 
-        # ---- מצב: בחירת סוג משלוח ----
+            # הודעה לא מוכרת
+            return (
+                f"לא הבנתי 🤔\n\n"
+                f"כתוב *מספר* להוסיף פריט (1, 2, 3, 4)\n"
+                f"כתוב *תפריט* לראות את התפריט\n"
+                f"כתוב *סיום* לסיים את הבחירה"
+                f"{CANCEL_HINT}"
+            )
+
+        # ════ CHOOSING_DELIVERY — סוג משלוח ════
         if state == ChatState.CHOOSING_DELIVERY:
+
             if body == "חזור":
                 set_state(phone, ChatState.ADDING_ITEMS)
-                cart_text = format_cart(session["cart"], db)
-                return f"{cart_text}\n\n" + MENU_TEXT
+                return f"{format_cart(session['cart'], db)}\n\n{build_menu_text(db)}"
 
             if body not in DELIVERY_OPTIONS:
-                return "כתוב *1* לאיסוף עצמי, *2* למשלוח להוד השרון, או *3* למשלוח לכפר סבא."
+                return (
+                    f"כתוב *1* לאיסוף עצמי\n"
+                    f"כתוב *2* למשלוח להוד השרון\n"
+                    f"כתוב *3* למשלוח לכפר סבא"
+                    f"{CANCEL_HINT}"
+                )
 
             option = DELIVERY_OPTIONS[body]
             subtotal = cart_subtotal(session["cart"], db)
 
             if body in ("2", "3") and subtotal < DELIVERY_MIN:
                 return (
-                    f"⚠️ המינימום למשלוח הוא ₪{DELIVERY_MIN:.0f}.\n"
-                    f"סכום הסל שלך כרגע: ₪{subtotal:.0f}.\n\n"
-                    f"כתוב *חזור* כדי להוסיף עוד פריטים, או *1* לאיסוף עצמי."
+                    f"⚠️ מינימום להזמנה למשלוח: ₪{DELIVERY_MIN:.0f}\n"
+                    f"סכום הסל כרגע: ₪{subtotal:.0f}\n\n"
+                    f"כתוב *חזור* להוסיף פריטים, או *1* לאיסוף עצמי."
+                    f"{CANCEL_HINT}"
                 )
 
             session["delivery_type"] = option["label"]
             session["delivery_cost"] = option["cost"]
+            save_session(phone)
 
             if option["cost"] > 0:
                 set_state(phone, ChatState.AWAITING_ADDRESS)
                 return (
                     f"בחרת: *{option['label']}* 🚗\n\n"
-                    f"לאיזו כתובת לשלוח? (רחוב, מספר בית, עיר)"
+                    f"לאיזו כתובת לשלוח?\n"
+                    f"(רחוב + מספר בית + עיר)"
+                    f"{CANCEL_HINT}"
                 )
             else:
                 set_state(phone, ChatState.AWAITING_NAME)
-                return f"בחרת: *{option['label']}* 🏃\n\nמה השם שלך לצורך ההזמנה?"
+                return (
+                    f"בחרת: *{option['label']}* 🏃\n\n"
+                    f"מה שמך לצורך ההזמנה?"
+                    f"{CANCEL_HINT}"
+                )
 
-        # ---- מצב: ממתין לכתובת משלוח ----
+        # ════ AWAITING_ADDRESS ════
         if state == ChatState.AWAITING_ADDRESS:
             session["delivery_address"] = body
+            save_session(phone)
             set_state(phone, ChatState.AWAITING_NAME)
-            return f"תודה! 📍 נשלח אל: *{body}*\n\nמה השם שלך לצורך ההזמנה?"
-
-        # ---- מצב: ממתין לשם ----
-        if state == ChatState.AWAITING_NAME:
-            session["name"] = body
-            set_state(phone, ChatState.AWAITING_PICKUP_TIME)
             return (
-                f"תודה {body}! 😊\n\n"
-                f"באיזו שעה תרצה "
-                f"{'לאסוף' if session['delivery_type'] == 'איסוף עצמי' else 'לקבל את המשלוח'}"
-                f" ביום שבת?\n(החל מ-08:00)"
+                f"📍 נשלח אל: *{body}*\n\n"
+                f"מה שמך לצורך ההזמנה?"
+                f"{CANCEL_HINT}"
             )
 
-        # ---- מצב: ממתין לשעת איסוף/משלוח ----
+        # ════ AWAITING_NAME ════
+        if state == ChatState.AWAITING_NAME:
+            session["name"] = body
+            save_session(phone)
+            set_state(phone, ChatState.AWAITING_PICKUP_TIME)
+            action = "לאסוף" if session["delivery_type"] == "איסוף עצמי" else "לקבל את המשלוח"
+            return (
+                f"תודה *{body}*! 😊\n\n"
+                f"באיזו שעה תרצה {action} ביום שבת?\n"
+                f"(החל מ-08:00)"
+                f"{CANCEL_HINT}"
+            )
+
+        # ════ AWAITING_PICKUP_TIME ════
         if state == ChatState.AWAITING_PICKUP_TIME:
             session["pickup_time"] = body
+            save_session(phone)
             set_state(phone, ChatState.CONFIRMING_ORDER)
+
             cart_text = format_cart(session["cart"], db, session["delivery_cost"])
             next_saturday = get_next_saturday()
+
             if session["delivery_type"] != "איסוף עצמי":
                 delivery_line = (
                     f"🚗 {session['delivery_type']}\n"
@@ -259,32 +334,55 @@ def handle_message(phone: str, body: str) -> str:
                 delivery_line = f"📍 איסוף עצמי — {BUSINESS_INFO['address']}"
 
             return (
+                f"📋 *סיכום ההזמנה שלך:*\n\n"
                 f"{cart_text}\n\n"
                 f"👤 שם: {session['name']}\n"
                 f"📅 תאריך: שבת {next_saturday}\n"
                 f"🕗 שעה: {body}\n"
                 f"{delivery_line}\n\n"
-                f"לאישור כתוב *אישור* ✅\n"
-                f"לביטול כתוב *ביטול* ❌"
+                f"השיבו:\n"
+                f"*אישור* — לאישור ✅\n"
+                f"*עריכה* — לחזרה לסל ✏️\n"
+                f"*ביטול* — לביטול ❌"
             )
 
-        # ---- מצב: אישור הזמנה ----
+        # ════ CONFIRMING_ORDER ════
         if state == ChatState.CONFIRMING_ORDER:
+
             if body == "אישור":
                 set_state(phone, ChatState.CHOOSING_PAYMENT)
                 return (
-                    "איך תרצה לשלם? 💳\n\n"
+                    "מעולה! 🎉\n\n"
+                    "💳 *איך תרצה לשלם?*\n\n"
                     "1️⃣ מזומן\n"
                     "2️⃣ ביט\n"
                     "3️⃣ פייבוקס"
+                    f"{CANCEL_HINT}"
                 )
 
-        # ---- מצב: בחירת אמצעי תשלום ----
+            if body in ("עריכה", "2"):
+                set_state(phone, ChatState.ADDING_ITEMS)
+                return (
+                    f"חזרת לסל ✏️\n\n"
+                    f"{format_cart(session['cart'], db)}\n\n"
+                    f"{build_menu_text(db)}"
+                )
+
+            return (
+                f"כתוב *אישור* לאישור ✅\n"
+                f"כתוב *עריכה* לחזרה לסל ✏️\n"
+                f"כתוב *ביטול* לביטול ❌"
+            )
+
+        # ════ CHOOSING_PAYMENT ════
         if state == ChatState.CHOOSING_PAYMENT:
             payment_map = {"1": "מזומן", "2": "ביט", "3": "פייבוקס"}
 
             if body not in payment_map:
-                return "כתוב *1* למזומן, *2* לביט, או *3* לפייבוקס."
+                return (
+                    f"כתוב *1* למזומן, *2* לביט, *3* לפייבוקס."
+                    f"{CANCEL_HINT}"
+                )
 
             session["payment_method"] = payment_map[body]
             customer = get_or_create_customer(phone, db)
@@ -304,7 +402,7 @@ def handle_message(phone: str, body: str) -> str:
             reset_session(phone)
 
             confirmation = (
-                f"✅ *ההזמנה שלך אושרה!*\n\n"
+                f"✅ *ההזמנה אושרה!*\n\n"
                 f"מספר הזמנה: #{order.id}\n"
                 f"📅 שבת {order.pickup_date}\n"
                 f"🕗 שעה: {order.pickup_time}\n"
@@ -322,9 +420,11 @@ def handle_message(phone: str, body: str) -> str:
             confirmation += "\nמחכים לך! ❤️🫓"
             return confirmation
 
-        # ---- ברירת מחדל — לפי מצב ----
-        hint = STATE_HINTS.get(state, "כתוב *הזמנה* להתחיל.")
-        return f"לא הבנתי 🤔\n\n{hint}"
+        # ════ ברירת מחדל ════
+        return (
+            "לא הבנתי 🤔\n\n"
+            "כתוב *שלום* להתחלה מחדש."
+        )
 
     finally:
         db.close()

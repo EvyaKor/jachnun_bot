@@ -65,9 +65,9 @@ class TestBasicFlow:
         assert "בני ברית" in reply
 
     def test_greeting_moves_to_browsing(self):
-        """אחרי ברכה — המצב עובר ל-BROWSING_MENU."""
+        """אחרי ברכה — המצב עובר ל-ADDING_ITEMS (תפריט מוצג מיד)."""
         handle_message(PHONE, "היי")
-        assert get_state(PHONE) == ChatState.BROWSING_MENU
+        assert get_state(PHONE) == ChatState.ADDING_ITEMS
 
     def test_menu_command_shows_menu(self):
         """כתיבת 'תפריט' מציגה את התפריט ועוברת למצב הזמנה."""
@@ -546,7 +546,7 @@ class TestFullOrderFlow:
         assert len(orders) == 0
 
     def test_confirming_unknown_message(self):
-        """הודעה לא מוכרת במצב אישור מחזירה עזרה."""
+        """הודעה לא מוכרת במצב אישור מחזירה אפשרויות אישור/עריכה/ביטול."""
         handle_message(PHONE, "היי")
         handle_message(PHONE, "הזמנה")
         handle_message(PHONE, "1")
@@ -555,7 +555,7 @@ class TestFullOrderFlow:
         handle_message(PHONE, "טסט")
         handle_message(PHONE, "09:00")
         reply = handle_message(PHONE, "משהו אחר")
-        assert "לא הבנתי" in reply
+        assert "אישור" in reply
 
     def test_order_confirmation_shows_saturday_date(self):
         """אישור הזמנה מציג את תאריך השבת."""
@@ -731,9 +731,8 @@ class TestSaturdayLogic:
             assert d == date(2026, 4, 4)
 
     def test_order_date_shown_in_confirmation(self):
-        """תאריך השבת מופיע בהודעת האישור."""
-        handle_message(PHONE, "היי")
-        reply = handle_message(PHONE, "הזמנה")
+        """תאריך השבת מופיע בהודעת הברכה הראשונה."""
+        reply = handle_message(PHONE, "היי")
         assert "/" in reply  # תאריך בפורמט DD/MM/YYYY
 
     def test_order_date_format(self):
@@ -770,7 +769,7 @@ class TestEdgeCases:
         handle_message(phone2, "היי")
 
         assert get_state(PHONE) == ChatState.ADDING_ITEMS
-        assert get_state(phone2) == ChatState.BROWSING_MENU
+        assert get_state(phone2) == ChatState.ADDING_ITEMS
 
         reset_session(phone2)
 
@@ -790,14 +789,16 @@ class TestEdgeCases:
         assert "1" in reply and "2" in reply and "3" in reply
 
     def test_menu_items_exist_in_db(self):
-        """פריטי התפריט קיימים במסד הנתונים."""
+        """פריטי התפריט קיימים במסד הנתונים (2 מנות + 2 תוספות)."""
         db = SessionLocal()
         items = db.query(MenuItem).all()
         db.close()
-        assert len(items) == 2
+        assert len(items) == 4
         names = [i.name for i in items]
         assert "ג'חנון" in names
         assert "קובנייה" in names
+        assert "ביצה נוספת" in names
+        assert "רסק עגניות + סחוג" in names
 
     def test_jachnun_price(self):
         """מחיר ג'חנון נכון — ₪25."""
@@ -820,7 +821,7 @@ class TestEdgeCases:
         db = SessionLocal()
         count = db.query(MenuItem).count()
         db.close()
-        assert count == 2
+        assert count == 4
 
     def test_whitespace_in_message_stripped(self):
         """רווחים בתחילת/סוף הודעה מוסרים."""
@@ -846,11 +847,11 @@ class TestEdgeCases:
         assert item.is_dairy is True
 
     def test_items_available_by_default(self):
-        """כל פריטי התפריט זמינים כברירת מחדל."""
+        """כל פריטי התפריט זמינים כברירת מחדל (2 מנות + 2 תוספות)."""
         db = SessionLocal()
         items = db.query(MenuItem).filter(MenuItem.is_available == True).all()
         db.close()
-        assert len(items) == 2
+        assert len(items) == 4
 
 
 # ============================================================
@@ -904,7 +905,7 @@ class TestHTTPEndpoints:
         assert response.status_code == 200
         # מוודא שה-session נוצר ללא הקידומת
         state = get_state("+972500000050")
-        assert state == ChatState.BROWSING_MENU
+        assert state == ChatState.ADDING_ITEMS
         reset_session("+972500000050")
 
     def test_webhook_missing_body_returns_422(self):
@@ -1037,7 +1038,7 @@ class TestStateMachine:
     def test_reset_session_sets_state_to_greeting(self):
         """reset_session מחזיר את המצב ל-GREETING."""
         handle_message(PHONE, "היי")
-        assert get_state(PHONE) == ChatState.BROWSING_MENU
+        assert get_state(PHONE) == ChatState.ADDING_ITEMS
         reset_session(PHONE)
         assert get_state(PHONE) == ChatState.GREETING
 
@@ -1053,7 +1054,7 @@ class TestStateMachine:
         """get_session יוצר session חדש אם לא קיים."""
         new_phone = "+972500009999"
         reset_session(new_phone)
-        from state_machine import sessions
+        from state_machine import _sessions as sessions
         # וודא שאין session
         sessions.pop(new_phone, None)
         session = get_session(new_phone)
@@ -1097,7 +1098,7 @@ class TestStateMachine:
         reset_session(PHONE)
         reply = handle_message(PHONE, "שלום")
         assert "ג'חנון אקספרס" in reply
-        assert get_state(PHONE) == ChatState.BROWSING_MENU
+        assert get_state(PHONE) == ChatState.ADDING_ITEMS
 
 
 # ============================================================

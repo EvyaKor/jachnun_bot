@@ -24,30 +24,52 @@ def init_db():
 
 def seed_menu():
     """
-    זורע את פריטי התפריט הראשוניים אם הטבלה ריקה.
-    מבוסס על תפריט ג'חנון אקספרס האמיתי.
+    זורע את פריטי התפריט אם הטבלה ריקה.
+    מנות עיקריות + תוספות.
     """
     db = SessionLocal()
     try:
-        if db.query(MenuItem).count() == 0:
-            menu_items = [
-                MenuItem(
-                    name="ג'חנון",
-                    description="ג'חנון פרווה חם וטרי, מוגש עם רסק, ביצה וסחוג",
-                    price=25.0,
-                    is_dairy=False,
-                    is_available=True,
-                ),
-                MenuItem(
-                    name="קובנייה",
-                    description="קובנייה חלבית חמה וטרייה, מוגשת עם רסק, ביצה וסחוג",
-                    price=20.0,
-                    is_dairy=True,
-                    is_available=True,
-                ),
-            ]
-            db.add_all(menu_items)
-            db.commit()
+        if db.query(MenuItem).count() > 0:
+            return
+
+        menu_items = [
+            # מנות עיקריות
+            MenuItem(
+                name="ג'חנון",
+                description="ג'חנון פרווה חם וטרי, מוגש עם רסק עגניות, ביצה וסחוג",
+                price=25.0,
+                is_dairy=False,
+                is_available=True,
+                is_extra=False,
+            ),
+            MenuItem(
+                name="קובנייה",
+                description="קובנייה חלבית חמה וטרייה, מוגשת עם רסק עגניות, ביצה וסחוג",
+                price=20.0,
+                is_dairy=True,
+                is_available=True,
+                is_extra=False,
+            ),
+            # תוספות
+            MenuItem(
+                name="ביצה נוספת",
+                description="ביצה קשה נוספת",
+                price=3.0,
+                is_dairy=False,
+                is_available=True,
+                is_extra=True,
+            ),
+            MenuItem(
+                name="רסק עגניות + סחוג",
+                description="תוספת רסק עגניות וסחוג",
+                price=3.0,
+                is_dairy=False,
+                is_available=True,
+                is_extra=True,
+            ),
+        ]
+        db.add_all(menu_items)
+        db.commit()
     finally:
         db.close()
 
