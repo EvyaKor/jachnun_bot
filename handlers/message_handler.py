@@ -9,6 +9,12 @@ from database.db import SessionLocal
 from state_machine import ChatState, get_session, get_state, set_state, reset_session
 from services.order_service import create_order, notify_gabriel, get_next_saturday
 
+GITHUB_RAW = "https://raw.githubusercontent.com/EvyaKor/jachnun_bot/main/images"
+PRODUCT_IMAGES = [
+    f"{GITHUB_RAW}/image1.jpg",
+    f"{GITHUB_RAW}/image2.jpg",
+]
+
 BUSINESS_INFO = {
     "name": "ג'חנון אקספרס",
     "address": "בני ברית 17, הוד השרון",
