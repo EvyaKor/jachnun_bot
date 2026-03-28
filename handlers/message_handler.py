@@ -17,6 +17,8 @@ BUSINESS_INFO = {
     "contact": "גבריאל 053-9475881",
 }
 
+GABRIEL_PAYMENT_PHONE = "054-2380330"  # מספר פרטי לביט/פייבוקס
+
 DELIVERY_OPTIONS = {
     "1": {"label": "איסוף עצמי", "cost": 0.0},
     "2": {"label": "משלוח להוד השרון", "cost": 15.0},
@@ -199,34 +201,59 @@ def handle_message(phone: str, body: str) -> str:
         # ---- מצב: אישור הזמנה ----
         if state == ChatState.CONFIRMING_ORDER:
             if body == "אישור":
-                customer = get_or_create_customer(phone, db)
-                customer.name = session["name"]
-                db.commit()
-
-                order = create_order(
-                    customer=customer,
-                    cart=session["cart"],
-                    pickup_time=session["pickup_time"],
-                    delivery_type=session["delivery_type"],
-                    delivery_cost=session["delivery_cost"],
-                    db=db,
-                )
-                notify_gabriel(order, customer, session["cart"], db)
-                reset_session(phone)
-
+                set_state(phone, ChatState.CHOOSING_PAYMENT)
                 return (
-                    f"✅ *ההזמנה שלך אושרה!*\n\n"
-                    f"מספר הזמנה: #{order.id}\n"
-                    f"📅 שבת {order.pickup_date}\n"
-                    f"🕗 שעה: {order.pickup_time}\n"
-                    f"🚗 {order.delivery_type}\n"
-                    f"💰 סה\"כ: ₪{order.total_price:.0f}\n\n"
-                    f"מחכים לך! ❤️🫓"
+                    "איך תרצה לשלם? 💳\n\n"
+                    "1️⃣ מזומן\n"
+                    "2️⃣ ביט\n"
+                    "3️⃣ פייבוקס"
                 )
 
             if body == "ביטול":
                 reset_session(phone)
                 return "ההזמנה בוטלה. כתוב *שלום* כדי להתחיל מחדש."
+
+        # ---- מצב: בחירת אמצעי תשלום ----
+        if state == ChatState.CHOOSING_PAYMENT:
+            payment_map = {"1": "מזומן", "2": "ביט", "3": "פייבוקס"}
+
+            if body not in payment_map:
+                return "כתוב *1* למזומן, *2* לביט, או *3* לפייבוקס."
+
+            session["payment_method"] = payment_map[body]
+            customer = get_or_create_customer(phone, db)
+            customer.name = session["name"]
+            db.commit()
+
+            order = create_order(
+                customer=customer,
+                cart=session["cart"],
+                pickup_time=session["pickup_time"],
+                delivery_type=session["delivery_type"],
+                delivery_cost=session["delivery_cost"],
+                db=db,
+            )
+            notify_gabriel(order, customer, session["cart"], db)
+            reset_session(phone)
+
+            confirmation = (
+                f"✅ *ההזמנה שלך אושרה!*\n\n"
+                f"מספר הזמנה: #{order.id}\n"
+                f"📅 שבת {order.pickup_date}\n"
+                f"🕗 שעה: {order.pickup_time}\n"
+                f"🚗 {order.delivery_type}\n"
+                f"💳 תשלום: {payment_map[body]}\n"
+                f"💰 סה\"כ: ₪{order.total_price:.0f}\n"
+            )
+
+            if body in ("2", "3"):
+                confirmation += (
+                    f"\nלתשלום ב{payment_map[body]} שלח ₪{order.total_price:.0f} למספר:\n"
+                    f"📱 *{GABRIEL_PAYMENT_PHONE}*\n"
+                )
+
+            confirmation += "\nמחכים לך! ❤️🫓"
+            return confirmation
 
         # ---- ברירת מחדל ----
         return (
