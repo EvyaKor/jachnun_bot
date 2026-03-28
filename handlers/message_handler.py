@@ -105,9 +105,7 @@ def handle_message(phone: str, body: str) -> str:
 
         # ---- מצב: עיון בתפריט ----
         if state == ChatState.BROWSING_MENU:
-            if body in ["תפריט", "menu"]:
-                return MENU_TEXT
-            if body == "הזמנה":
+            if body in ["תפריט", "menu", "הזמנה"]:
                 set_state(phone, ChatState.ADDING_ITEMS)
                 return (
                     f"מעולה! ההזמנה תהיה לשבת ה-{get_next_saturday()} 📅\n\n"
