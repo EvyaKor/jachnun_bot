@@ -88,7 +88,7 @@ def build_menu_text(db: Session) -> str:
     lines = ["📋 *מה נכין לכם היום?*\n"]
 
     for idx, item in enumerate(mains, 1):
-        dairy = " (חלבי)" if item.is_dairy else " (פרווה)"
+        dairy = " (חלבי)" if item.is_dairy else ""
         lines.append(f"{EMOJI_NUMBERS[idx]} {item.name}{dairy} — ₪{item.price:.0f}")
         lines.append(f"   עם ביצה, רסק עגניות וסחוג 🍅🥚\n")
 

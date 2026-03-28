@@ -2122,8 +2122,8 @@ class TestAdminCommands:
         handle_message(ADMIN_PHONE, "/sold_out 1")  # ג'חנון אזל
         reply = handle_message(PHONE, "היי")
         assert "קובנייה" in reply
-        # "ג'חנון (פרווה)" (שורת הפריט) לא אמורה להופיע — שם העסק "ג'חנון אקספרס" עדיין בהודעת הברכה
-        assert "ג'חנון (פרווה)" not in reply
+        # "1️⃣ ג'חנון" (שורת הפריט) לא אמורה להופיע — שם העסק "ג'חנון אקספרס" עדיין בהודעת הברכה
+        assert "1️⃣ ג'חנון" not in reply
 
     def test_non_admin_cannot_use_stock_command(self):
         """לקוח רגיל לא יכול להשתמש בפקודות אדמין."""
