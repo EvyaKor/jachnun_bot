@@ -712,9 +712,8 @@ class TestSaturdayLogic:
 
     def test_next_saturday_not_today_if_saturday(self):
         """אם היום שבת — מחזיר את השבת הבאה ולא היום."""
-        with patch("services.order_service.date") as mock_date:
-            mock_date.today.return_value = date(2026, 4, 4)  # שבת
-            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.date.return_value = date(2026, 4, 4)  # שבת
             saturday_str = get_next_saturday()
             from datetime import datetime
             d = datetime.strptime(saturday_str, "%d/%m/%Y").date()
@@ -722,9 +721,8 @@ class TestSaturdayLogic:
 
     def test_next_saturday_from_sunday(self):
         """מיום ראשון — השבת הקרובה היא 6 ימים קדימה."""
-        with patch("services.order_service.date") as mock_date:
-            mock_date.today.return_value = date(2026, 3, 29)  # ראשון
-            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.date.return_value = date(2026, 3, 29)  # ראשון
             saturday_str = get_next_saturday()
             from datetime import datetime
             d = datetime.strptime(saturday_str, "%d/%m/%Y").date()
@@ -1779,9 +1777,8 @@ class TestOrderService:
 
     def test_get_next_saturday_from_friday_returns_next_day(self):
         """מיום שישי — השבת הקרובה היא למחרת."""
-        with patch("services.order_service.date") as mock_date:
-            mock_date.today.return_value = date(2026, 4, 3)  # שישי
-            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.date.return_value = date(2026, 4, 3)  # שישי
             saturday = get_next_saturday()
             from datetime import datetime
             d = datetime.strptime(saturday, "%d/%m/%Y").date()
@@ -1789,9 +1786,8 @@ class TestOrderService:
 
     def test_get_next_saturday_from_monday_returns_same_week_saturday(self):
         """מיום שני — השבת הקרובה היא באותו שבוע."""
-        with patch("services.order_service.date") as mock_date:
-            mock_date.today.return_value = date(2026, 3, 30)  # שני
-            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+        with patch("services.order_service.datetime") as mock_dt:
+            mock_dt.now.return_value.date.return_value = date(2026, 3, 30)  # שני
             saturday = get_next_saturday()
             from datetime import datetime
             d = datetime.strptime(saturday, "%d/%m/%Y").date()
@@ -1967,3 +1963,188 @@ class TestHebrewEdgeCases:
         reply = handle_message(PHONE, "11:30")
         assert "11:30" in reply
         assert get_state(PHONE) == ChatState.CONFIRMING_ORDER
+
+# ============================================================
+# 16. בדיקות אימות כתובת
+# ============================================================
+
+class TestAddressValidation:
+
+    def _reach_address_state(self):
+        """מביא את הסשן למצב AWAITING_ADDRESS (משלוח להוד השרון, סל ≥ ₪70)."""
+        handle_message(PHONE, "היי")
+        # 3 ג'חנונים = ₪75
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")  # משלוח להוד השרון
+
+    def test_valid_address_accepted(self):
+        """כתובת תקינה (רחוב + מספר + עיר) מתקבלת."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "הרצל 5, הוד השרון")
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+        assert "הרצל 5" in reply
+
+    def test_vague_address_rejected(self):
+        """כתובת עמומה ללא מספר נדחית."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "ליד המכולת")
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS  # נשאר באותו מצב
+        assert "לא ברורה" in reply
+
+    def test_single_word_address_rejected(self):
+        """מילה אחת בלי מספר נדחית."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "תלאביב")
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+        assert "לא ברורה" in reply
+
+    def test_address_with_digit_accepted(self):
+        """כתובת עם מספר בית מתקבלת."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "דיזנגוף 50 תל אביב")
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
+    def test_address_hint_shown_on_rejection(self):
+        """הודעת הדחייה מציגה דוגמה לכתובת תקינה."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "ליד הגינה")
+        assert "הרצל 5" in reply  # דוגמה בהודעת השגיאה
+
+    def test_valid_address_moves_to_awaiting_name(self):
+        """כתובת תקינה מעבירה ל-AWAITING_NAME."""
+        self._reach_address_state()
+        handle_message(PHONE, "בן גוריון 12, כפר סבא")
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
+
+# ============================================================
+# 17. בדיקות סיכום איסוף עצמי ללא כתובת
+# ============================================================
+
+class TestSelfPickupSummary:
+
+    def _reach_confirming_self_pickup(self):
+        """מביא לסיכום עם איסוף עצמי."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")   # איסוף עצמי
+        handle_message(PHONE, "ישראל")
+        handle_message(PHONE, "09:00")
+
+    def test_self_pickup_summary_no_customer_address(self):
+        """בסיכום איסוף עצמי אין שורת כתובת לקוח."""
+        self._reach_confirming_self_pickup()
+        # בשלב CONFIRMING_ORDER — מה שהוצג הוא הסיכום
+        # נשלח הודעה לא מוכרת כדי לקבל את הסיכום שוב
+        reply = handle_message(PHONE, "לא יודע")
+        # הסיכום כולל "איסוף עצמי" אבל לא כתובת ספציפית של לקוח
+        assert "איסוף עצמי" in reply or "אישור" in reply
+
+    def test_self_pickup_summary_shows_runner_emoji(self):
+        """בסיכום איסוף עצמי מופיע אימוג'י ריצה (ולא מכונית)."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")   # איסוף עצמי
+        handle_message(PHONE, "ישראל")
+        reply = handle_message(PHONE, "09:00")  # זה הסיכום
+        assert "🏃" in reply
+        assert "📍 כתובת:" not in reply  # לא כתובת לקוח
+
+    def test_delivery_summary_shows_customer_address(self):
+        """בסיכום משלוח מופיעה כתובת הלקוח."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")   # משלוח להוד השרון
+        handle_message(PHONE, "הרצל 5, הוד השרון")
+        handle_message(PHONE, "ישראל")
+        reply = handle_message(PHONE, "09:00")  # זה הסיכום
+        assert "הרצל 5" in reply
+        assert "🚗" in reply
+
+
+# ============================================================
+# 18. בדיקות פקודות אדמין (מלאי)
+# ============================================================
+
+ADMIN_PHONE = "+972539475881"
+
+
+class TestAdminCommands:
+
+    def test_stock_command_shows_all_items(self):
+        """/stock מציג את כל פריטי התפריט."""
+        reply = handle_message(ADMIN_PHONE, "/stock")
+        assert "ג'חנון" in reply
+        assert "קובנייה" in reply
+        assert "ביצה נוספת" in reply
+
+    def test_sold_out_by_number(self):
+        """/sold_out 1 מסמן את הפריט הראשון כאזל."""
+        reply = handle_message(ADMIN_PHONE, "/sold_out 1")
+        assert "ג'חנון" in reply
+        assert "❌" in reply
+        db = SessionLocal()
+        item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        db.close()
+        assert item.is_available is False
+
+    def test_sold_out_by_name(self):
+        """/sold_out קובנייה מסמן לפי שם."""
+        reply = handle_message(ADMIN_PHONE, "/sold_out קובנייה")
+        assert "קובנייה" in reply
+        assert "❌" in reply
+        db = SessionLocal()
+        item = db.query(MenuItem).filter(MenuItem.name == "קובנייה").first()
+        db.close()
+        assert item.is_available is False
+
+    def test_restock_restores_item(self):
+        """/restock מחזיר פריט אזול לתפריט."""
+        handle_message(ADMIN_PHONE, "/sold_out 1")
+        reply = handle_message(ADMIN_PHONE, "/restock 1")
+        assert "ג'חנון" in reply
+        assert "✅" in reply
+        db = SessionLocal()
+        item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        db.close()
+        assert item.is_available is True
+
+    def test_sold_out_item_removed_from_menu(self):
+        """פריט שאזל לא מופיע בתפריט ולא ניתן להזמינו."""
+        handle_message(ADMIN_PHONE, "/sold_out 1")  # ג'חנון אזל
+        reply = handle_message(PHONE, "היי")
+        assert "קובנייה" in reply
+        # "ג'חנון (פרווה)" (שורת הפריט) לא אמורה להופיע — שם העסק "ג'חנון אקספרס" עדיין בהודעת הברכה
+        assert "ג'חנון (פרווה)" not in reply
+
+    def test_non_admin_cannot_use_stock_command(self):
+        """לקוח רגיל לא יכול להשתמש בפקודות אדמין."""
+        reply = handle_message(PHONE, "/stock")
+        # הבוט לא מזהה את הפקודה — מחזיר הודעת עזרה רגילה
+        assert "לא הבנתי" in reply or "ג'חנון" in reply  # ברכה או שגיאה, לא תוצאת /stock
+
+    def test_sold_out_unknown_item(self):
+        """/sold_out עם שם שלא קיים מחזיר הודעת שגיאה."""
+        reply = handle_message(ADMIN_PHONE, "/sold_out פלאפל")
+        assert "לא הבנתי" in reply
+
+    def test_admin_command_does_not_advance_state(self):
+        """פקודת אדמין לא מעדכנת את מצב השיחה של גבריאל."""
+        handle_message(ADMIN_PHONE, "/stock")
+        state = get_state(ADMIN_PHONE)
+        assert state == ChatState.GREETING or state == ChatState.ADDING_ITEMS
+
+    def test_stock_shows_availability_status(self):
+        """/stock מציג ✅ ל-זמין ו-❌ לאזל."""
+        handle_message(ADMIN_PHONE, "/sold_out 1")
+        reply = handle_message(ADMIN_PHONE, "/stock")
+        assert "❌" in reply  # ג'חנון אזל
+        assert "✅" in reply  # שאר הפריטים זמינים

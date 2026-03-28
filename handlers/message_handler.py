@@ -49,6 +49,9 @@ EMOJI_NUMBERS = {1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5�
 CANCEL_HINT = "\n\n_כתוב *ביטול* לביטול ההזמנה_"
 RESET_KEYWORDS = {"שלום", "התחל מחדש", "restart", "start", "היי", "הי", "hello", "hi"}
 
+# פקודות אדמין — זמינות רק לגבריאל
+ADMIN_PHONE = "+972539475881"
+
 
 # ── עזר: תפריט ──────────────────────────────────────────────
 
@@ -157,6 +160,83 @@ def get_or_create_customer(phone: str, db: Session) -> Customer:
     return customer
 
 
+# ── אימות כתובת ─────────────────────────────────────────────
+
+def is_valid_address(address: str) -> bool:
+    """
+    בודק שהכתובת מכילה לפחות רחוב ומספר (לא תיאור כללי כמו 'ליד המכולת').
+    דרישות: לפחות 2 מילים + לפחות ספרה אחת (מספר בית).
+    """
+    words = address.strip().split()
+    has_digit = any(char.isdigit() for char in address)
+    return len(words) >= 2 and has_digit
+
+
+# ── פקודות אדמין ─────────────────────────────────────────────
+
+def handle_admin_command(phone: str, body: str, db) -> str | None:
+    """
+    מטפל בפקודות מנהל (רק לגבריאל).
+    מחזיר תשובה אם הפקודה זוהתה, None אחרת.
+
+    /sold_out [מספר]  — מסמן פריט כאזל
+    /restock [מספר]   — מחזיר פריט לתפריט
+    /stock            — מציג סטטוס כל הפריטים
+    """
+    if phone != ADMIN_PHONE:
+        return None
+
+    cmd = body.strip().lower()
+
+    if cmd == "/stock":
+        items = db.query(MenuItem).order_by(MenuItem.id).all()
+        lines = ["📦 *סטטוס מלאי:*\n"]
+        for i, item in enumerate(items, 1):
+            status = "✅ זמין" if item.is_available else "❌ אזל"
+            lines.append(f"{i}. {item.name} — {status}")
+        lines.append("\n/sold_out [מספר] — לסגירה")
+        lines.append("/restock [מספר] — להחזרה")
+        return "\n".join(lines)
+
+    if cmd.startswith("/sold_out"):
+        parts = body.strip().split(maxsplit=1)
+        item = _find_item_by_number_or_name(parts[1] if len(parts) > 1 else None, db)
+        if not item:
+            return "לא הבנתי את הפריט. שלח /stock לראות את הרשימה."
+        item.is_available = False
+        db.commit()
+        return f"❌ *{item.name}* סומן כאזל מהמלאי.\nלקוחות לא יוכלו להזמין אותו עד שתחזיר אותו."
+
+    if cmd.startswith("/restock"):
+        parts = body.strip().split(maxsplit=1)
+        item = _find_item_by_number_or_name(parts[1] if len(parts) > 1 else None, db)
+        if not item:
+            return "לא הבנתי את הפריט. שלח /stock לראות את הרשימה."
+        item.is_available = True
+        db.commit()
+        return f"✅ *{item.name}* זמין שוב בתפריט!"
+
+    return None
+
+
+def _find_item_by_number_or_name(query: str | None, db) -> MenuItem | None:
+    """מוצא פריט תפריט לפי מספר סידורי (1,2,3...) או שם חלקי."""
+    if not query:
+        return None
+    all_items = db.query(MenuItem).order_by(MenuItem.id).all()
+    # חיפוש לפי מספר
+    if query.isdigit():
+        idx = int(query) - 1
+        if 0 <= idx < len(all_items):
+            return all_items[idx]
+    # חיפוש לפי שם חלקי
+    query_lower = query.strip().lower()
+    for item in all_items:
+        if query_lower in item.name.lower():
+            return item
+    return None
+
+
 # ── הטיפול הראשי ─────────────────────────────────────────────
 
 def handle_message(phone: str, body: str) -> str:
@@ -170,6 +250,11 @@ def handle_message(phone: str, body: str) -> str:
     db = SessionLocal()
 
     try:
+
+        # ════ פקודות אדמין — בעדיפות עליונה ════
+        admin_reply = handle_admin_command(phone, body, db)
+        if admin_reply is not None:
+            return admin_reply
 
         # ════ פקודות גלובליות — עובדות מכל מצב ════
 
@@ -294,6 +379,13 @@ def handle_message(phone: str, body: str) -> str:
 
         # ════ AWAITING_ADDRESS ════
         if state == ChatState.AWAITING_ADDRESS:
+            if not is_valid_address(body):
+                return (
+                    f"הכתובת לא ברורה 🤔\n\n"
+                    f"נא לכתוב כתובת מלאה הכוללת רחוב, מספר בית ועיר.\n"
+                    f"לדוגמה: *הרצל 5, הוד השרון*"
+                    f"{CANCEL_HINT}"
+                )
             session["delivery_address"] = body
             save_session(phone)
             set_state(phone, ChatState.AWAITING_NAME)
@@ -331,7 +423,7 @@ def handle_message(phone: str, body: str) -> str:
                     f"📍 כתובת: {session['delivery_address']}"
                 )
             else:
-                delivery_line = f"📍 איסוף עצמי — {BUSINESS_INFO['address']}"
+                delivery_line = "🏃 איסוף עצמי"
 
             return (
                 f"📋 *סיכום ההזמנה שלך:*\n\n"

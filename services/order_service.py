@@ -3,12 +3,15 @@
 כולל: חישוב שבת קרובה, יצירת הזמנה, שליחת התראה לגבריאל.
 """
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem, Order, OrderItem
 from twilio.rest import Client
 import os
 from dotenv import load_dotenv
+
+ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
 load_dotenv()
 
@@ -20,10 +23,12 @@ TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 
 def get_next_saturday() -> str:
     """
-    מחשב את תאריך השבת הקרובה.
+    מחשב את תאריך השבת הקרובה לפי שעון ישראל (Asia/Jerusalem).
     תמיד מחזיר את השבת הבאה — גם אם היום שבת (אז יחזיר שבת הבאה).
+    משתמש ב-timezone ישראלי כדי שמשתמש שמזמין ב-23:00 ישראלי
+    יקבל את השבת הנכונה (ולא UTC שכבר עבר לשישי/שבת).
     """
-    today = date.today()
+    today = datetime.now(ISRAEL_TZ).date()
     days_until_saturday = (5 - today.weekday()) % 7  # שבת = 5 ב-Python
     if days_until_saturday == 0:
         days_until_saturday = 7  # אם היום שבת — קח את השבת הבאה
