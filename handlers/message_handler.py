@@ -23,7 +23,7 @@ BUSINESS_INFO = {
     "contact": "גבריאל 053-9475881",
 }
 
-GABRIEL_PAYMENT_PHONE = "054-2380330"  # מספר פרטי לביט/פייבוקס
+GABRIEL_PAYMENT_PHONE = "054-2380330"
 
 DELIVERY_OPTIONS = {
     "1": {"label": "איסוף עצמי", "cost": 0.0},
@@ -31,7 +31,7 @@ DELIVERY_OPTIONS = {
     "3": {"label": "משלוח לכפר סבא", "cost": 25.0},
 }
 
-DELIVERY_MIN = 70.0  # מינימום הזמנה למשלוח
+DELIVERY_MIN = 70.0
 
 MENU_TEXT = (
     "📋 *התפריט שלנו:*\n\n"
@@ -41,7 +41,8 @@ MENU_TEXT = (
     "   מוגשת עם רסק, ביצה וסחוג 🍅🥚\n\n"
     "כתוב *1* להזמין ג'חנון\n"
     "כתוב *2* להזמין קובנייה\n"
-    "כתוב *סיום* לסיים את ההזמנה"
+    "כתוב *סיום* לסיים את ההזמנה\n"
+    "כתוב *ביטול* לביטול ההזמנה"
 )
 
 WELCOME_TEXT = (
@@ -49,9 +50,33 @@ WELCOME_TEXT = (
     "ג'חנונים וקובניות טריים וחמים שלא תוכלו להפסיק ללקק את האצבעות 😁\n\n"
     "📍 {address}\n"
     "🕗 {days} מ-{pickup_from}\n\n"
-    "כתוב *תפריט* לצפייה בתפריט\n"
     "כתוב *הזמנה* להתחיל להזמין"
 ).format(**BUSINESS_INFO)
+
+# מצבים שבהם יש הזמנה פעילה — ביטול רלוונטי
+ACTIVE_ORDER_STATES = {
+    ChatState.ADDING_ITEMS,
+    ChatState.CHOOSING_DELIVERY,
+    ChatState.AWAITING_ADDRESS,
+    ChatState.AWAITING_NAME,
+    ChatState.AWAITING_PICKUP_TIME,
+    ChatState.CONFIRMING_ORDER,
+    ChatState.CHOOSING_PAYMENT,
+}
+
+# הודעות עזרה לפי מצב
+STATE_HINTS = {
+    ChatState.BROWSING_MENU: "כתוב *הזמנה* להתחיל להזמין.",
+    ChatState.ADDING_ITEMS: "כתוב *1* לג'חנון, *2* לקובנייה, *סיום* לסיים, *ביטול* לביטול.",
+    ChatState.CHOOSING_DELIVERY: "כתוב *1*, *2* או *3* לבחירת אופן קבלה, או *חזור* לסל.",
+    ChatState.AWAITING_ADDRESS: "כתוב את הכתובת המלאה למשלוח.",
+    ChatState.AWAITING_NAME: "כתוב את שמך לצורך ההזמנה.",
+    ChatState.AWAITING_PICKUP_TIME: "כתוב את השעה הרצויה (למשל: 09:00).",
+    ChatState.CONFIRMING_ORDER: "כתוב *אישור* לאישור ההזמנה, או *ביטול* לביטול.",
+    ChatState.CHOOSING_PAYMENT: "כתוב *1* למזומן, *2* לביט, *3* לפייבוקס.",
+}
+
+RESET_KEYWORDS = {"שלום", "התחל מחדש", "restart", "start"}
 
 
 def get_or_create_customer(phone: str, db: Session) -> Customer:
@@ -104,6 +129,19 @@ def handle_message(phone: str, body: str) -> str:
     db = SessionLocal()
 
     try:
+        # ---- פקודות גלובליות — עובדות מכל מצב ----
+
+        # איפוס מלא
+        if body in RESET_KEYWORDS:
+            reset_session(phone)
+            set_state(phone, ChatState.BROWSING_MENU)
+            return WELCOME_TEXT
+
+        # ביטול הזמנה פעילה מכל שלב
+        if body == "ביטול" and state in ACTIVE_ORDER_STATES:
+            reset_session(phone)
+            return "ההזמנה בוטלה ✅\n\nכתוב *הזמנה* כדי להתחיל מחדש."
+
         # ---- מצב: ברכה ראשונית ----
         if state == ChatState.GREETING:
             set_state(phone, ChatState.BROWSING_MENU)
@@ -120,6 +158,12 @@ def handle_message(phone: str, body: str) -> str:
 
         # ---- מצב: הוספת פריטים לסל ----
         if state == ChatState.ADDING_ITEMS:
+            # הצגת תפריט מחדש מבלי לאבד את הסל
+            if body in ["תפריט", "menu"]:
+                cart_text = format_cart(session["cart"], db) if session["cart"] else ""
+                prefix = f"{cart_text}\n\n" if cart_text and cart_text != "הסל שלך ריק." else ""
+                return prefix + MENU_TEXT
+
             if body == "1":
                 item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
                 if item:
@@ -154,7 +198,8 @@ def handle_message(phone: str, body: str) -> str:
         if state == ChatState.CHOOSING_DELIVERY:
             if body == "חזור":
                 set_state(phone, ChatState.ADDING_ITEMS)
-                return MENU_TEXT + "\n\nהמשך להוסיף פריטים וכתוב *סיום* בסיום:"
+                cart_text = format_cart(session["cart"], db)
+                return f"{cart_text}\n\n" + MENU_TEXT
 
             if body not in DELIVERY_OPTIONS:
                 return "כתוב *1* לאיסוף עצמי, *2* למשלוח להוד השרון, או *3* למשלוח לכפר סבא."
@@ -182,11 +227,6 @@ def handle_message(phone: str, body: str) -> str:
                 set_state(phone, ChatState.AWAITING_NAME)
                 return f"בחרת: *{option['label']}* 🏃\n\nמה השם שלך לצורך ההזמנה?"
 
-        # ---- חזור להוספת פריטים ----
-        if body == "חזור" and state == ChatState.CHOOSING_DELIVERY:
-            set_state(phone, ChatState.ADDING_ITEMS)
-            return MENU_TEXT + "\n\nהמשך להוסיף פריטים וכתוב *סיום* בסיום:"
-
         # ---- מצב: ממתין לכתובת משלוח ----
         if state == ChatState.AWAITING_ADDRESS:
             session["delivery_address"] = body
@@ -197,7 +237,12 @@ def handle_message(phone: str, body: str) -> str:
         if state == ChatState.AWAITING_NAME:
             session["name"] = body
             set_state(phone, ChatState.AWAITING_PICKUP_TIME)
-            return f"תודה {body}! 😊\n\nבאיזו שעה תרצה {'לאסוף' if session['delivery_type'] == 'איסוף עצמי' else 'לקבל את המשלוח'} ביום שבת?\n(החל מ-08:00)"
+            return (
+                f"תודה {body}! 😊\n\n"
+                f"באיזו שעה תרצה "
+                f"{'לאסוף' if session['delivery_type'] == 'איסוף עצמי' else 'לקבל את המשלוח'}"
+                f" ביום שבת?\n(החל מ-08:00)"
+            )
 
         # ---- מצב: ממתין לשעת איסוף/משלוח ----
         if state == ChatState.AWAITING_PICKUP_TIME:
@@ -233,10 +278,6 @@ def handle_message(phone: str, body: str) -> str:
                     "2️⃣ ביט\n"
                     "3️⃣ פייבוקס"
                 )
-
-            if body == "ביטול":
-                reset_session(phone)
-                return "ההזמנה בוטלה. כתוב *שלום* כדי להתחיל מחדש."
 
         # ---- מצב: בחירת אמצעי תשלום ----
         if state == ChatState.CHOOSING_PAYMENT:
@@ -281,13 +322,9 @@ def handle_message(phone: str, body: str) -> str:
             confirmation += "\nמחכים לך! ❤️🫓"
             return confirmation
 
-        # ---- ברירת מחדל ----
-        return (
-            "לא הבנתי 🤔\n\n"
-            "כתוב *תפריט* לצפייה בתפריט\n"
-            "כתוב *הזמנה* להתחיל להזמין\n"
-            "כתוב *שלום* להתחיל מחדש"
-        )
+        # ---- ברירת מחדל — לפי מצב ----
+        hint = STATE_HINTS.get(state, "כתוב *הזמנה* להתחיל.")
+        return f"לא הבנתי 🤔\n\n{hint}"
 
     finally:
         db.close()
