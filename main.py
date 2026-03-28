@@ -97,6 +97,7 @@ def _build_admin_html(grouped: dict, total: int, pending: int, revenue: int, nex
                         <div style='font-weight:bold'>{order.customer.name or 'לא צוין'}</div>
                         <div style='font-size:0.85rem;color:#666'>📱 {order.customer.phone_number}</div>
                         <div style='font-size:0.85rem;color:#444;margin-top:6px'>🕗 {order.pickup_time} | {delivery_icon} {order.delivery_type}</div>
+                        {'<div style=\'font-size:0.85rem;color:#444;margin-top:2px\'>📍 ' + order.delivery_address + '</div>' if order.delivery_address else ''}
                         <div style='font-size:0.85rem;color:#444;margin-top:4px;line-height:1.6'>{items_html}</div>
                         <div style='font-weight:bold;color:#c0392b'>💰 ₪{order.total_price:.0f}</div>
                     </div>

@@ -38,6 +38,7 @@ def create_order(
     delivery_type: str,
     delivery_cost: float,
     db: Session,
+    delivery_address: str = None,
 ) -> Order:
     """
     יוצר הזמנה חדשה במסד הנתונים עם תאריך שבת אוטומטי.
@@ -57,6 +58,7 @@ def create_order(
         pickup_time=pickup_time,
         delivery_type=delivery_type,
         delivery_cost=delivery_cost,
+        delivery_address=delivery_address,
         total_price=total,
         status="ממתין",
     )
@@ -80,7 +82,10 @@ def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session):
     lines = [f"🔔 *הזמנה חדשה #{order.id}*\n"]
     lines.append(f"👤 {customer.name or 'לא צוין'} | {customer.phone_number}")
     lines.append(f"📅 {order.pickup_date} בשעה {order.pickup_time}")
-    lines.append(f"🚗 {order.delivery_type}\n")
+    if order.delivery_address:
+        lines.append(f"🚗 {order.delivery_type} → {order.delivery_address}\n")
+    else:
+        lines.append(f"🚗 {order.delivery_type}\n")
     lines.append("🛒 פריטים:")
 
     for item_id, qty in cart.items():

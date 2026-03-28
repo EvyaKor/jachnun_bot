@@ -12,6 +12,7 @@ class ChatState(str, Enum):
     BROWSING_MENU = "עיון_בתפריט"
     ADDING_ITEMS = "הוספת_פריטים"
     CHOOSING_DELIVERY = "בחירת_משלוח"
+    AWAITING_ADDRESS = "ממתין_לכתובת"
     AWAITING_NAME = "ממתין_לשם"
     AWAITING_PICKUP_TIME = "ממתין_לשעת_איסוף"
     CONFIRMING_ORDER = "אישור_הזמנה"
@@ -38,6 +39,7 @@ def get_session(phone: str) -> dict:
             "pickup_time": None,
             "delivery_type": None,  # איסוף עצמי / הוד השרון / כפר סבא
             "delivery_cost": 0.0,
+            "delivery_address": None,  # כתובת למשלוח (רק אם לא איסוף עצמי)
             "payment_method": None, # מזומן / ביט / פייבוקס
         }
     return sessions[phone]

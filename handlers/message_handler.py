@@ -165,13 +165,27 @@ def handle_message(phone: str, body: str) -> str:
 
             session["delivery_type"] = option["label"]
             session["delivery_cost"] = option["cost"]
-            set_state(phone, ChatState.AWAITING_NAME)
-            return f"בחרת: *{option['label']}* {'🚗' if option['cost'] > 0 else '🏃'}\n\nמה השם שלך לצורך ההזמנה?"
+
+            if option["cost"] > 0:
+                set_state(phone, ChatState.AWAITING_ADDRESS)
+                return (
+                    f"בחרת: *{option['label']}* 🚗\n\n"
+                    f"לאיזו כתובת לשלוח? (רחוב, מספר בית, עיר)"
+                )
+            else:
+                set_state(phone, ChatState.AWAITING_NAME)
+                return f"בחרת: *{option['label']}* 🏃\n\nמה השם שלך לצורך ההזמנה?"
 
         # ---- חזור להוספת פריטים ----
         if body == "חזור" and state == ChatState.CHOOSING_DELIVERY:
             set_state(phone, ChatState.ADDING_ITEMS)
             return MENU_TEXT + "\n\nהמשך להוסיף פריטים וכתוב *סיום* בסיום:"
+
+        # ---- מצב: ממתין לכתובת משלוח ----
+        if state == ChatState.AWAITING_ADDRESS:
+            session["delivery_address"] = body
+            set_state(phone, ChatState.AWAITING_NAME)
+            return f"תודה! 📍 נשלח אל: *{body}*\n\nמה השם שלך לצורך ההזמנה?"
 
         # ---- מצב: ממתין לשם ----
         if state == ChatState.AWAITING_NAME:
@@ -185,11 +199,14 @@ def handle_message(phone: str, body: str) -> str:
             set_state(phone, ChatState.CONFIRMING_ORDER)
             cart_text = format_cart(session["cart"], db, session["delivery_cost"])
             next_saturday = get_next_saturday()
-            delivery_line = (
-                f"🚗 {session['delivery_type']}"
-                if session["delivery_type"] != "איסוף עצמי"
-                else f"📍 איסוף עצמי — {BUSINESS_INFO['address']}"
-            )
+            if session["delivery_type"] != "איסוף עצמי":
+                delivery_line = (
+                    f"🚗 {session['delivery_type']}\n"
+                    f"📍 כתובת: {session['delivery_address']}"
+                )
+            else:
+                delivery_line = f"📍 איסוף עצמי — {BUSINESS_INFO['address']}"
+
             return (
                 f"{cart_text}\n\n"
                 f"👤 שם: {session['name']}\n"
@@ -233,6 +250,7 @@ def handle_message(phone: str, body: str) -> str:
                 pickup_time=session["pickup_time"],
                 delivery_type=session["delivery_type"],
                 delivery_cost=session["delivery_cost"],
+                delivery_address=session.get("delivery_address"),
                 db=db,
             )
             notify_gabriel(order, customer, session["cart"], db)

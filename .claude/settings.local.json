@@ -1,7 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(venv/Scripts/pytest tests/test_bot.py -v)"
+      "Bash(venv/Scripts/pytest tests/test_bot.py -v)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(python -m pytest tests/test_bot.py -v)",
+      "Bash(source venv/Scripts/activate)",
+      "Bash(pip install:*)"
     ]
   }
 }

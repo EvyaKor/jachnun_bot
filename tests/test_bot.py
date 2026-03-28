@@ -259,6 +259,7 @@ class TestDelivery:
         """עלות משלוח מתווספת לסכום הכולל."""
         self._fill_cart(total_above_70=True)
         handle_message(PHONE, "2")  # הוד השרון +15
+        handle_message(PHONE, "רחוב טסט 1")  # כתובת
         handle_message(PHONE, "טסט")  # שם
         reply = handle_message(PHONE, "09:00")  # שעה
         assert "₪90" in reply  # 75 + 15
@@ -267,6 +268,7 @@ class TestDelivery:
         """עלות משלוח כפר סבא מתווספת נכון."""
         self._fill_cart(total_above_70=True)
         handle_message(PHONE, "3")  # כפר סבא +25
+        handle_message(PHONE, "רחוב טסט 1")  # כתובת
         handle_message(PHONE, "טסט")
         reply = handle_message(PHONE, "09:00")
         assert "₪100" in reply  # 75 + 25
@@ -306,7 +308,7 @@ class TestDelivery:
 
 class TestFullOrderFlow:
 
-    def _complete_order(self, delivery="1", payment="1", name="טסט"):
+    def _complete_order(self, delivery="1", payment="1", name="טסט", address="רחוב טסט 1"):
         handle_message(PHONE, "היי")
         handle_message(PHONE, "הזמנה")
         handle_message(PHONE, "1")
@@ -314,6 +316,8 @@ class TestFullOrderFlow:
         handle_message(PHONE, "1")
         handle_message(PHONE, "סיום")
         handle_message(PHONE, delivery)
+        if delivery != "1":  # לא איסוף עצמי — צריך כתובת
+            handle_message(PHONE, address)
         handle_message(PHONE, name)
         handle_message(PHONE, "09:00")
         handle_message(PHONE, "אישור")
@@ -504,7 +508,93 @@ class TestFullOrderFlow:
 
 
 # ============================================================
-# 5. בדיקות לוגיקת שבת
+# 5. בדיקות כתובת משלוח
+# ============================================================
+
+class TestDeliveryAddress:
+
+    def _fill_cart_above_min(self):
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+
+    def test_delivery_asks_for_address(self):
+        """בחירת משלוח מבקשת כתובת."""
+        self._fill_cart_above_min()
+        reply = handle_message(PHONE, "2")
+        assert "כתובת" in reply
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+
+    def test_kfar_saba_asks_for_address(self):
+        """בחירת כפר סבא גם מבקשת כתובת."""
+        self._fill_cart_above_min()
+        reply = handle_message(PHONE, "3")
+        assert "כתובת" in reply
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+
+    def test_self_pickup_skips_address(self):
+        """איסוף עצמי לא מבקש כתובת."""
+        self._fill_cart_above_min()
+        handle_message(PHONE, "1")
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
+    def test_address_saved_in_session(self):
+        """כתובת נשמרת ב-session."""
+        self._fill_cart_above_min()
+        handle_message(PHONE, "2")
+        handle_message(PHONE, "רחוב הרצל 5, הוד השרון")
+        session = get_session(PHONE)
+        assert session["delivery_address"] == "רחוב הרצל 5, הוד השרון"
+
+    def test_address_shown_in_confirmation(self):
+        """כתובת מוצגת בסיכום ההזמנה."""
+        self._fill_cart_above_min()
+        handle_message(PHONE, "2")
+        handle_message(PHONE, "רחוב הרצל 5, הוד השרון")
+        handle_message(PHONE, "ישראל")
+        reply = handle_message(PHONE, "09:00")
+        assert "רחוב הרצל 5" in reply
+
+    def test_address_saved_to_db(self):
+        """כתובת נשמרת במסד הנתונים."""
+        self._fill_cart_above_min()
+        handle_message(PHONE, "2")
+        handle_message(PHONE, "רחוב הרצל 5, הוד השרון")
+        handle_message(PHONE, "ישראל")
+        handle_message(PHONE, "09:00")
+        handle_message(PHONE, "אישור")
+        handle_message(PHONE, "1")
+        db = SessionLocal()
+        order = db.query(Order).first()
+        db.close()
+        assert order.delivery_address == "רחוב הרצל 5, הוד השרון"
+
+    def test_self_pickup_no_address_in_db(self):
+        """איסוף עצמי — כתובת ריקה ב-DB."""
+        self._fill_cart_above_min()
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "ישראל")
+        handle_message(PHONE, "09:00")
+        handle_message(PHONE, "אישור")
+        handle_message(PHONE, "1")
+        db = SessionLocal()
+        order = db.query(Order).first()
+        db.close()
+        assert order.delivery_address is None
+
+    def test_address_moves_to_awaiting_name(self):
+        """אחרי כתובת — עובר למצב AWAITING_NAME."""
+        self._fill_cart_above_min()
+        handle_message(PHONE, "2")
+        handle_message(PHONE, "רחוב הרצל 5")
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
+
+# ============================================================
+# 6. בדיקות לוגיקת שבת
 # ============================================================
 
 class TestSaturdayLogic:

@@ -50,6 +50,7 @@ class Order(Base):
     pickup_time = Column(String, nullable=True)    # שעת איסוף — נבחרת על ידי הלקוח
     delivery_type = Column(String, default="איסוף עצמי")  # איסוף עצמי / הוד השרון / כפר סבא
     delivery_cost = Column(Float, default=0.0)
+    delivery_address = Column(String, nullable=True)  # כתובת משלוח — ריק באיסוף עצמי
     notes = Column(Text, nullable=True)
     total_price = Column(Float, default=0.0)       # כולל עלות משלוח
     created_at = Column(DateTime, default=datetime.utcnow)
