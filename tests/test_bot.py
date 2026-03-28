@@ -201,6 +201,61 @@ class TestCart:
         reply = handle_message(PHONE, "סיום")
         assert get_state(PHONE) == ChatState.CHOOSING_DELIVERY
 
+    def test_add_five_jachnun_total_correct(self):
+        """הוספת 5 ג'חנון — סה\"כ ₪125."""
+        self._start_ordering()
+        for _ in range(5):
+            handle_message(PHONE, "1")
+        session = get_session(PHONE)
+        db = SessionLocal()
+        from handlers.message_handler import cart_subtotal
+        total = cart_subtotal(session["cart"], db)
+        db.close()
+        assert total == 125.0
+
+    def test_mixed_large_order_3_jachnun_2_kubane(self):
+        """הזמנה מעורבת: 3 ג'חנון + 2 קובנייה = ₪115."""
+        self._start_ordering()
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "2")
+        reply = handle_message(PHONE, "2")
+        assert "₪115" in reply
+
+    def test_cart_survives_through_awaiting_address(self):
+        """הסל נשמר במצב AWAITING_ADDRESS."""
+        self._start_ordering()
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")  # הוד השרון — מעבר ל-AWAITING_ADDRESS
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+        session = get_session(PHONE)
+        assert len(session["cart"]) > 0
+
+    def test_cart_survives_through_awaiting_name(self):
+        """הסל נשמר במצב AWAITING_NAME."""
+        self._start_ordering()
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")  # איסוף עצמי — מעבר ל-AWAITING_NAME
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+        session = get_session(PHONE)
+        assert len(session["cart"]) > 0
+
+    def test_cart_survives_through_awaiting_pickup_time(self):
+        """הסל נשמר במצב AWAITING_PICKUP_TIME."""
+        self._start_ordering()
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "שם טסט")  # מעבר ל-AWAITING_PICKUP_TIME
+        assert get_state(PHONE) == ChatState.AWAITING_PICKUP_TIME
+        session = get_session(PHONE)
+        assert len(session["cart"]) > 0
+
 
 # ============================================================
 # 3. בדיקות לוגיקת משלוח
@@ -297,6 +352,55 @@ class TestDelivery:
     def test_self_pickup_no_minimum(self):
         """איסוף עצמי עובד גם עם סל מתחת ל-₪70."""
         self._fill_cart(total_above_70=False)
+        reply = handle_message(PHONE, "1")
+        assert "איסוף עצמי" in reply
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
+    def test_exactly_70_delivery_is_available(self):
+        """בדיוק ₪70 — משלוח זמין (גבול תחתון כולל: 70 >= 70)."""
+        # 2 ג'חנון (₪50) + 1 קובנייה (₪20) = ₪70
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")  # 25
+        handle_message(PHONE, "1")  # 25
+        handle_message(PHONE, "2")  # 20 → סה"כ 70
+        handle_message(PHONE, "סיום")
+        reply = handle_message(PHONE, "2")  # הוד השרון
+        # צריך לעבור — לא להחזיר הודעת מינימום
+        assert "מינימום" not in reply
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+
+    def test_below_70_delivery_not_available(self):
+        """מתחת ל-₪70 — משלוח לא זמין."""
+        # 1 ג'חנון (₪25) — מתחת למינימום
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")  # 25
+        handle_message(PHONE, "סיום")
+        reply = handle_message(PHONE, "2")
+        assert "מינימום" in reply or "70" in reply
+        assert get_state(PHONE) == ChatState.CHOOSING_DELIVERY
+
+    def test_back_then_add_item_completes_normally(self):
+        """אחרי 'חזור', המשתמש מוסיף פריט ומשלים הזמנה נורמלית."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "חזור")  # חזור ל-ADDING_ITEMS
+        assert get_state(PHONE) == ChatState.ADDING_ITEMS
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        assert get_state(PHONE) == ChatState.CHOOSING_DELIVERY
+
+    def test_self_pickup_large_order_works(self):
+        """איסוף עצמי עם הזמנה גדולה עובד ללא בעיות."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        for _ in range(5):
+            handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
         reply = handle_message(PHONE, "1")
         assert "איסוף עצמי" in reply
         assert get_state(PHONE) == ChatState.AWAITING_NAME
@@ -855,3 +959,1010 @@ class TestHTTPEndpoints:
 
         response = self.client.get("/admin")
         assert "שם לקוח" in response.text
+
+
+# ============================================================
+# 8. בדיקות מכונת המצבים (TestStateMachine)
+# ============================================================
+
+class TestStateMachine:
+
+    def test_reset_session_clears_cart(self):
+        """reset_session מנקה את הסל."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        session = get_session(PHONE)
+        assert len(session["cart"]) > 0
+        reset_session(PHONE)
+        session = get_session(PHONE)
+        assert session["cart"] == {}
+
+    def test_reset_session_clears_name(self):
+        """reset_session מנקה את השם."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "גבי")
+        session = get_session(PHONE)
+        assert session["name"] == "גבי"
+        reset_session(PHONE)
+        session = get_session(PHONE)
+        assert session["name"] is None
+
+    def test_reset_session_clears_address(self):
+        """reset_session מנקה את הכתובת."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")
+        handle_message(PHONE, "רחוב הרצל 5")
+        session = get_session(PHONE)
+        assert session["delivery_address"] == "רחוב הרצל 5"
+        reset_session(PHONE)
+        session = get_session(PHONE)
+        assert session["delivery_address"] is None
+
+    def test_reset_session_clears_delivery_type(self):
+        """reset_session מנקה את סוג המשלוח."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")  # איסוף עצמי
+        session = get_session(PHONE)
+        assert session["delivery_type"] == "איסוף עצמי"
+        reset_session(PHONE)
+        session = get_session(PHONE)
+        assert session["delivery_type"] is None
+
+    def test_reset_session_clears_delivery_cost(self):
+        """reset_session מנקה את עלות המשלוח."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")  # איסוף עצמי — עלות 0
+        session = get_session(PHONE)
+        assert session["delivery_cost"] == 0.0
+        reset_session(PHONE)
+        session = get_session(PHONE)
+        assert session["delivery_cost"] == 0.0
+
+    def test_reset_session_sets_state_to_greeting(self):
+        """reset_session מחזיר את המצב ל-GREETING."""
+        handle_message(PHONE, "היי")
+        assert get_state(PHONE) == ChatState.BROWSING_MENU
+        reset_session(PHONE)
+        assert get_state(PHONE) == ChatState.GREETING
+
+    def test_set_state_and_get_state(self):
+        """set_state ו-get_state עובדים נכון."""
+        from state_machine import set_state
+        set_state(PHONE, ChatState.ADDING_ITEMS)
+        assert get_state(PHONE) == ChatState.ADDING_ITEMS
+        set_state(PHONE, ChatState.CHOOSING_PAYMENT)
+        assert get_state(PHONE) == ChatState.CHOOSING_PAYMENT
+
+    def test_get_session_creates_new_if_not_exists(self):
+        """get_session יוצר session חדש אם לא קיים."""
+        new_phone = "+972500009999"
+        reset_session(new_phone)
+        from state_machine import sessions
+        # וודא שאין session
+        sessions.pop(new_phone, None)
+        session = get_session(new_phone)
+        assert session is not None
+        assert session["state"] == ChatState.GREETING
+        reset_session(new_phone)
+
+    def test_all_chat_states_exist(self):
+        """כל ערכי ChatState קיימים."""
+        assert hasattr(ChatState, "GREETING")
+        assert hasattr(ChatState, "BROWSING_MENU")
+        assert hasattr(ChatState, "ADDING_ITEMS")
+        assert hasattr(ChatState, "CHOOSING_DELIVERY")
+        assert hasattr(ChatState, "AWAITING_ADDRESS")
+        assert hasattr(ChatState, "AWAITING_NAME")
+        assert hasattr(ChatState, "AWAITING_PICKUP_TIME")
+        assert hasattr(ChatState, "CONFIRMING_ORDER")
+        assert hasattr(ChatState, "CHOOSING_PAYMENT")
+        assert hasattr(ChatState, "ORDER_PLACED")
+        assert hasattr(ChatState, "CANCELLED")
+
+    def test_sessions_independent_per_phone(self):
+        """sessions עצמאיים לכל מספר טלפון."""
+        phone_a = "+972500001111"
+        phone_b = "+972500002222"
+        reset_session(phone_a)
+        reset_session(phone_b)
+        handle_message(phone_a, "היי")
+        handle_message(phone_a, "הזמנה")
+        # phone_a ב-ADDING_ITEMS, phone_b ב-GREETING
+        assert get_state(phone_a) == ChatState.ADDING_ITEMS
+        assert get_state(phone_b) == ChatState.GREETING
+        reset_session(phone_a)
+        reset_session(phone_b)
+
+    def test_after_reset_new_message_starts_fresh(self):
+        """אחרי reset, הודעה חדשה מתחילה מברכה מחדש."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        reset_session(PHONE)
+        reply = handle_message(PHONE, "שלום")
+        assert "ג'חנון אקספרס" in reply
+        assert get_state(PHONE) == ChatState.BROWSING_MENU
+
+
+# ============================================================
+# 9. בדיקות התראת גבריאל (TestNotification)
+# ============================================================
+
+class TestNotification:
+
+    def _make_order_and_customer(self, with_address=True):
+        """יוצר Order ו-Customer לבדיקות ישירות של notify_gabriel.
+        מחזיר (order, customer, cart, db) — הקורא אחראי לסגור את db."""
+        db = SessionLocal()
+        customer = Customer(phone_number="+972500000042", name="ישראל כהן")
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+
+        jachnun = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+
+        order = Order(
+            customer_id=customer.id,
+            pickup_date="05/04/2026",
+            pickup_time="09:00",
+            delivery_type="משלוח להוד השרון" if with_address else "איסוף עצמי",
+            delivery_cost=15.0 if with_address else 0.0,
+            delivery_address="רחוב הרצל 5, הוד השרון" if with_address else None,
+            total_price=90.0 if with_address else 75.0,
+            status="ממתין",
+        )
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+        cart = {jachnun.id: 3}
+        return order, customer, cart, db
+
+    def test_notify_gabriel_with_address_shows_arrow(self):
+        """notify_gabriel עם כתובת מציג חץ → ואת הכתובת."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer(with_address=True)
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "רחוב הרצל 5" in printed
+                assert "→" in printed
+        db.close()
+
+    def test_notify_gabriel_without_address_no_arrow(self):
+        """notify_gabriel ללא כתובת (איסוף עצמי) — בלי חץ."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer(with_address=False)
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "→" not in printed
+                assert "איסוף עצמי" in printed
+        db.close()
+
+    def test_notify_gabriel_no_twilio_no_exception(self):
+        """notify_gabriel ללא Twilio לא זורק exception."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer(with_address=False)
+        try:
+            with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+                with patch.object(order_svc, "TWILIO_AUTH_TOKEN", None):
+                    notify_gabriel(order, customer, cart, db)
+        except Exception:
+            pytest.fail("notify_gabriel זרק exception כשאין Twilio")
+        finally:
+            db.close()
+
+    def test_notify_gabriel_message_contains_order_id(self):
+        """הודעה לגבריאל מכילה מספר הזמנה."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer()
+        order_id = order.id
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert str(order_id) in printed
+        db.close()
+
+    def test_notify_gabriel_message_contains_customer_name(self):
+        """הודעה לגבריאל מכילה שם הלקוח."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer()
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "ישראל כהן" in printed
+        db.close()
+
+    def test_notify_gabriel_message_contains_customer_phone(self):
+        """הודעה לגבריאל מכילה מספר טלפון הלקוח."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer()
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "+972500000042" in printed
+        db.close()
+
+    def test_notify_gabriel_message_contains_total_price(self):
+        """הודעה לגבריאל מכילה מחיר כולל."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer()
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "90" in printed
+        db.close()
+
+    def test_notify_gabriel_message_contains_pickup_date_and_time(self):
+        """הודעה לגבריאל מכילה תאריך ושעה."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer()
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "05/04/2026" in printed
+                assert "09:00" in printed
+        db.close()
+
+    def test_notify_gabriel_message_contains_item_names_and_quantities(self):
+        """הודעה לגבריאל מכילה שמות פריטים וכמויות."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        order, customer, cart, db = self._make_order_and_customer()
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "x3" in printed  # כמות
+                assert "חנון" in printed  # חלק משם הפריט (ללא גרש שמוחלק בrepr)
+        db.close()
+
+
+# ============================================================
+# 10. בדיקות שלמות מסד נתונים (TestDatabaseIntegrity)
+# ============================================================
+
+class TestDatabaseIntegrity:
+
+    def _complete_order_with_items(self, phone=PHONE, delivery="1", items_1=1, items_2=0, name="טסט"):
+        """עוזר ליצירת הזמנה עם כמויות מותאמות."""
+        handle_message(phone, "היי")
+        handle_message(phone, "הזמנה")
+        for _ in range(items_1):
+            handle_message(phone, "1")
+        for _ in range(items_2):
+            handle_message(phone, "2")
+        handle_message(phone, "סיום")
+        handle_message(phone, delivery)
+        if delivery != "1":
+            handle_message(phone, "רחוב טסט 1")
+        handle_message(phone, name)
+        handle_message(phone, "09:00")
+        handle_message(phone, "אישור")
+        handle_message(phone, "1")
+
+    def test_order_item_quantity_2_when_added_twice(self):
+        """הוספת ג'חנון פעמיים יוצרת OrderItem אחד עם quantity=2."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "טסט")
+        handle_message(PHONE, "09:00")
+        handle_message(PHONE, "אישור")
+        handle_message(PHONE, "1")
+
+        db = SessionLocal()
+        order = db.query(Order).first()
+        items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+        db.close()
+
+        # צריך להיות רשומה אחת עם quantity=2 (לא שתי רשומות)
+        assert len(items) == 1
+        assert items[0].quantity == 2
+
+    def test_order_has_correct_customer_id(self):
+        """להזמנה יש customer_id נכון."""
+        self._complete_order_with_items(name="לקוח בדיקה")
+        db = SessionLocal()
+        customer = db.query(Customer).filter(Customer.phone_number == PHONE).first()
+        order = db.query(Order).first()
+        db.close()
+        assert order.customer_id == customer.id
+
+    def test_order_item_has_correct_order_id_and_menu_item_id(self):
+        """ל-OrderItem יש order_id ו-menu_item_id נכונים."""
+        self._complete_order_with_items()
+        db = SessionLocal()
+        order = db.query(Order).first()
+        jachnun = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        order_item = db.query(OrderItem).filter(OrderItem.order_id == order.id).first()
+        db.close()
+        assert order_item.order_id == order.id
+        assert order_item.menu_item_id == jachnun.id
+
+    def test_two_different_customers_have_separate_records(self):
+        """שני לקוחות שונים — רשומות נפרדות."""
+        phone2 = "+972500000077"
+        reset_session(phone2)
+        self._complete_order_with_items(phone=PHONE, name="לקוח ראשון")
+        self._complete_order_with_items(phone=phone2, name="לקוח שני")
+        db = SessionLocal()
+        customers = db.query(Customer).all()
+        db.close()
+        reset_session(phone2)
+        assert len(customers) == 2
+        phones = [c.phone_number for c in customers]
+        assert PHONE in phones
+        assert phone2 in phones
+
+    def test_customer_phone_unique_second_order_updates_not_duplicates(self):
+        """הזמנה שנייה מאותו טלפון — מעדכנת לקוח קיים ולא יוצרת כפיל."""
+        self._complete_order_with_items(name="שם ראשון")
+        reset_session(PHONE)
+        self._complete_order_with_items(name="שם שני")
+        db = SessionLocal()
+        customers = db.query(Customer).filter(Customer.phone_number == PHONE).all()
+        db.close()
+        assert len(customers) == 1
+        assert customers[0].name == "שם שני"
+
+    def test_order_total_price_includes_delivery_cost(self):
+        """total_price כולל עלות משלוח."""
+        # 3 ג'חנון = ₪75, הוד השרון = ₪15, סה"כ = ₪90
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")  # הוד השרון
+        handle_message(PHONE, "רחוב טסט 1")
+        handle_message(PHONE, "טסט")
+        handle_message(PHONE, "09:00")
+        handle_message(PHONE, "אישור")
+        handle_message(PHONE, "1")
+
+        db = SessionLocal()
+        order = db.query(Order).first()
+        db.close()
+        assert order.total_price == 90.0
+        assert order.delivery_cost == 15.0
+
+
+# ============================================================
+# 11. בדיקות דשבורד אדמין (TestAdminDashboard)
+# ============================================================
+
+class TestAdminDashboard:
+
+    @pytest.fixture(autouse=True)
+    def http_client(self):
+        """יוצר FastAPI test client."""
+        from fastapi.testclient import TestClient
+        import main
+        self.client = TestClient(main.app)
+
+    def _create_order(self, phone="+972510000001", name="לקוח טסט", delivery="1",
+                      items=3, payment="1"):
+        """יוצר הזמנה מלאה לבדיקות דשבורד."""
+        reset_session(phone)
+        handle_message(phone, "היי")
+        handle_message(phone, "הזמנה")
+        for _ in range(items):
+            handle_message(phone, "1")
+        handle_message(phone, "סיום")
+        handle_message(phone, delivery)
+        if delivery != "1":
+            handle_message(phone, "רחוב דשבורד 1")
+        handle_message(phone, name)
+        handle_message(phone, "09:00")
+        handle_message(phone, "אישור")
+        handle_message(phone, payment)
+        reset_session(phone)
+
+    def test_dashboard_shows_correct_total_count(self):
+        """דשבורד מציג ספירת הזמנות נכונה."""
+        self._create_order(phone="+972510000001", name="לקוח 1")
+        self._create_order(phone="+972510000002", name="לקוח 2")
+        response = self.client.get("/admin")
+        assert "2" in response.text
+
+    def test_dashboard_shows_correct_pending_count(self):
+        """דשבורד מציג ספירת ממתינות נכונה."""
+        self._create_order(phone="+972510000011", name="ממתין 1")
+        response = self.client.get("/admin")
+        assert "ממתינות לאישור" in response.text or "ממתין" in response.text
+
+    def test_dashboard_shows_revenue_excluding_cancelled(self):
+        """הכנסה צפויה לא כוללת הזמנות מבוטלות."""
+        self._create_order(phone="+972510000021", name="הזמנה רגילה")
+        db = SessionLocal()
+        order = db.query(Order).order_by(Order.id.desc()).first()
+        order.status = "בוטל"
+        db.commit()
+        db.close()
+
+        response = self.client.get("/admin")
+        # ₪0 כי ההזמנה בוטלה
+        assert "₪0" in response.text
+
+    def test_dashboard_shows_next_saturday_date(self):
+        """דשבורד מציג את תאריך השבת הקרובה."""
+        saturday = get_next_saturday()
+        response = self.client.get("/admin")
+        assert saturday in response.text
+
+    def test_dashboard_shows_customer_name(self):
+        """דשבורד מציג שם לקוח."""
+        self._create_order(phone="+972510000031", name="אברהם אבינו")
+        response = self.client.get("/admin")
+        assert "אברהם אבינו" in response.text
+
+    def test_dashboard_shows_customer_phone(self):
+        """דשבורד מציג מספר טלפון לקוח."""
+        self._create_order(phone="+972510000041", name="לקוח טסט")
+        response = self.client.get("/admin")
+        assert "+972510000041" in response.text
+
+    def test_dashboard_shows_pickup_time(self):
+        """דשבורד מציג שעת איסוף."""
+        self._create_order(phone="+972510000051")
+        response = self.client.get("/admin")
+        assert "09:00" in response.text
+
+    def test_dashboard_shows_delivery_type(self):
+        """דשבורד מציג סוג משלוח."""
+        self._create_order(phone="+972510000061")
+        response = self.client.get("/admin")
+        assert "איסוף עצמי" in response.text
+
+    def test_dashboard_shows_delivery_address_when_present(self):
+        """דשבורד מציג כתובת משלוח כשקיימת."""
+        self._create_order(phone="+972510000071", delivery="2")
+        response = self.client.get("/admin")
+        assert "רחוב דשבורד 1" in response.text
+
+    def test_dashboard_shows_order_items(self):
+        """דשבורד מציג פריטי הזמנה."""
+        self._create_order(phone="+972510000081")
+        response = self.client.get("/admin")
+        assert "ג'חנון" in response.text
+
+    def test_dashboard_shows_order_total_price(self):
+        """דשבורד מציג מחיר כולל של הזמנה."""
+        self._create_order(phone="+972510000091", items=3)  # 75
+        response = self.client.get("/admin")
+        assert "75" in response.text
+
+    def test_dashboard_shows_no_orders_message_when_empty(self):
+        """דשבורד מציג 'אין הזמנות' כשאין הזמנות."""
+        response = self.client.get("/admin")
+        assert "אין הזמנות" in response.text
+
+    def test_dashboard_update_to_approved_shows_in_dashboard(self):
+        """עדכון הזמנה ל'אושר' — מוצג בדשבורד."""
+        self._create_order(phone="+972510000101")
+        db = SessionLocal()
+        order = db.query(Order).order_by(Order.id.desc()).first()
+        order_id = order.id
+        db.close()
+
+        self.client.post(f"/admin/update/{order_id}", data={"status": "אושר"},
+                         follow_redirects=False)
+        response = self.client.get("/admin")
+        assert "אושר" in response.text
+
+    def test_dashboard_cancelled_excluded_from_revenue(self):
+        """הזמנה מבוטלת לא נספרת בהכנסה."""
+        self._create_order(phone="+972510000111", items=3)  # 75
+        db = SessionLocal()
+        order = db.query(Order).order_by(Order.id.desc()).first()
+        order.status = "בוטל"
+        db.commit()
+        db.close()
+
+        response = self.client.get("/admin")
+        # הכנסה צריכה להיות 0 (הזמנה בוטלה)
+        assert "₪0" in response.text
+
+    def test_update_nonexistent_order_returns_redirect(self):
+        """עדכון הזמנה לא קיימת מחזיר redirect ולא קריסה."""
+        response = self.client.post("/admin/update/99999", data={"status": "אושר"},
+                                    follow_redirects=False)
+        assert response.status_code == 303
+
+
+# ============================================================
+# 12. בדיקות TwiML Webhook (TestWebhookTwiML)
+# ============================================================
+
+class TestWebhookTwiML:
+
+    @pytest.fixture(autouse=True)
+    def http_client(self):
+        """יוצר FastAPI test client."""
+        from fastapi.testclient import TestClient
+        import main
+        self.client = TestClient(main.app)
+
+    def test_greeting_webhook_response_contains_media_tags(self):
+        """תשובת ה-webhook לברכה ראשונה מכילה תגי <Media>."""
+        phone = "+972510001001"
+        reset_session(phone)
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "היי"
+        })
+        assert response.status_code == 200
+        assert "<Media>" in response.text or "Media" in response.text
+        reset_session(phone)
+
+    def test_non_greeting_webhook_response_no_media_tags(self):
+        """תשובת ה-webhook שאינה ברכה ראשונה לא מכילה תגי Media."""
+        phone = "+972510001002"
+        reset_session(phone)
+        handle_message(phone, "היי")  # עוברים מ-GREETING
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "תפריט"
+        })
+        assert response.status_code == 200
+        # לא אמורה להיות Media בתגובה שאינה ברכה
+        assert "<Media>" not in response.text
+        reset_session(phone)
+
+    def test_webhook_handles_hebrew_body_correctly(self):
+        """ה-webhook מטפל בגוף עם טקסט עברי נכון."""
+        phone = "+972510001003"
+        reset_session(phone)
+        handle_message(phone, "היי")
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "תפריט"
+        })
+        assert response.status_code == 200
+        assert "ג'חנון" in response.text
+        reset_session(phone)
+
+    def test_webhook_response_is_valid_xml(self):
+        """תשובת ה-webhook היא XML תקין שניתן לפרס."""
+        import xml.etree.ElementTree as ET
+        phone = "+972510001004"
+        reset_session(phone)
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "שלום"
+        })
+        assert response.status_code == 200
+        try:
+            ET.fromstring(response.text)
+        except ET.ParseError:
+            pytest.fail("תשובת ה-webhook אינה XML תקין")
+        reset_session(phone)
+
+    def test_webhook_greeting_has_two_media_images(self):
+        """ברכה ראשונה מכילה 2 תמונות."""
+        phone = "+972510001005"
+        reset_session(phone)
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "היי"
+        })
+        assert response.status_code == 200
+        # בדיקה שה-XML מכיל לפחות 2 הפניות לתמונות
+        from handlers.message_handler import PRODUCT_IMAGES
+        assert len(PRODUCT_IMAGES) == 2
+        for img_url in PRODUCT_IMAGES:
+            assert img_url in response.text
+        reset_session(phone)
+
+
+# ============================================================
+# 13. בדיקות זרימת תשלום (TestPaymentFlow)
+# ============================================================
+
+class TestPaymentFlow:
+
+    def _reach_payment(self, phone=PHONE):
+        """מגיע למצב CHOOSING_PAYMENT."""
+        handle_message(phone, "היי")
+        handle_message(phone, "הזמנה")
+        handle_message(phone, "1")
+        handle_message(phone, "1")
+        handle_message(phone, "1")
+        handle_message(phone, "סיום")
+        handle_message(phone, "1")
+        handle_message(phone, "טסט")
+        handle_message(phone, "09:00")
+        handle_message(phone, "אישור")
+
+    def test_invalid_payment_stays_in_choosing_payment(self):
+        """בחירת תשלום לא חוקית — נשאר במצב CHOOSING_PAYMENT."""
+        self._reach_payment()
+        assert get_state(PHONE) == ChatState.CHOOSING_PAYMENT
+        handle_message(PHONE, "X")
+        assert get_state(PHONE) == ChatState.CHOOSING_PAYMENT
+
+    def test_multiple_invalid_payments_dont_change_state(self):
+        """מספר בחירות תשלום לא חוקיות לא משנות מצב."""
+        self._reach_payment()
+        for invalid in ["0", "5", "abc", "ביט"]:
+            handle_message(PHONE, invalid)
+        assert get_state(PHONE) == ChatState.CHOOSING_PAYMENT
+
+    def test_cash_payment_confirmation_no_phone_number(self):
+        """אישור תשלום במזומן לא מציג מספר טלפון."""
+        self._reach_payment()
+        reply = handle_message(PHONE, "1")
+        assert "054-2380330" not in reply
+
+    def test_bit_payment_confirmation_includes_phone(self):
+        """אישור תשלום בביט מציג מספר טלפון לתשלום."""
+        self._reach_payment()
+        reply = handle_message(PHONE, "2")
+        assert "054-2380330" in reply
+
+    def test_paybox_payment_confirmation_includes_phone(self):
+        """אישור תשלום בפייבוקס מציג מספר טלפון לתשלום."""
+        self._reach_payment()
+        reply = handle_message(PHONE, "3")
+        assert "054-2380330" in reply
+
+    def test_confirmation_includes_order_id(self):
+        """אישור הזמנה מציג מספר הזמנה."""
+        self._reach_payment()
+        reply = handle_message(PHONE, "1")
+        assert "#" in reply
+
+    def test_confirmation_includes_total_price(self):
+        """אישור הזמנה מציג מחיר כולל."""
+        self._reach_payment()
+        reply = handle_message(PHONE, "1")
+        assert "75" in reply  # 3 ג'חנון
+
+    def test_confirmation_includes_pickup_date(self):
+        """אישור הזמנה מציג תאריך איסוף."""
+        self._reach_payment()
+        reply = handle_message(PHONE, "1")
+        saturday = get_next_saturday()
+        assert saturday in reply
+
+
+# ============================================================
+# 14. זרימה מלאה עם כתובת משלוח (TestFullFlowWithAddress)
+# ============================================================
+
+class TestFullFlowWithAddress:
+
+    def _complete_delivery_order(self, phone=PHONE, delivery_option="2",
+                                  address="רחוב הרצל 5, הוד השרון", name="דוד לוי",
+                                  payment="1"):
+        """זרימה מלאה עם משלוח."""
+        handle_message(phone, "היי")
+        handle_message(phone, "הזמנה")
+        handle_message(phone, "1")
+        handle_message(phone, "1")
+        handle_message(phone, "1")
+        handle_message(phone, "סיום")
+        handle_message(phone, delivery_option)
+        handle_message(phone, address)
+        handle_message(phone, name)
+        handle_message(phone, "09:00")
+        handle_message(phone, "אישור")
+        return handle_message(phone, payment)
+
+    def test_complete_order_hod_hasharon(self):
+        """זרימה מלאה להוד השרון — ברכה→תפריט→פריטים→משלוח→כתובת→שם→שעה→אישור→תשלום."""
+        reply = self._complete_delivery_order(delivery_option="2",
+                                               address="רחוב הרצל 5, הוד השרון")
+        assert "אושרה" in reply
+
+    def test_complete_order_kfar_saba_correct_total(self):
+        """זרימה מלאה לכפר סבא — סה\"כ = 75 + 25 = ₪100."""
+        reply = self._complete_delivery_order(delivery_option="3",
+                                               address="רחוב ויצמן 3, כפר סבא")
+        assert "100" in reply
+
+    def test_address_appears_in_final_confirmation(self):
+        """הכתובת מופיעה בהודעת האישור הסופית."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")
+        handle_message(PHONE, "רחוב הרצל 5, הוד השרון")
+        handle_message(PHONE, "דוד לוי")
+        reply = handle_message(PHONE, "09:00")
+        assert "רחוב הרצל 5" in reply
+
+    def test_address_saved_in_db(self):
+        """הכתובת נשמרת במסד הנתונים."""
+        self._complete_delivery_order(address="רחוב ירושלים 10, הוד השרון")
+        db = SessionLocal()
+        order = db.query(Order).first()
+        db.close()
+        assert order.delivery_address == "רחוב ירושלים 10, הוד השרון"
+
+    def test_address_in_gabriel_notification(self):
+        """הכתובת כלולה בהודעת ההתראה לגבריאל."""
+        from services.order_service import notify_gabriel
+        import services.order_service as order_svc
+
+        db = SessionLocal()
+        customer = Customer(phone_number="+972500099001", name="לקוח בדיקה")
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+
+        jachnun = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        order = Order(
+            customer_id=customer.id,
+            pickup_date="05/04/2026",
+            pickup_time="09:00",
+            delivery_type="משלוח להוד השרון",
+            delivery_cost=15.0,
+            delivery_address="רחוב הנביאים 7, הוד השרון",
+            total_price=90.0,
+            status="ממתין",
+        )
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+        cart = {jachnun.id: 3}
+
+        with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
+            with patch("builtins.print") as mock_print:
+                notify_gabriel(order, customer, cart, db)
+                printed = " ".join(str(c) for c in mock_print.call_args_list)
+                assert "רחוב הנביאים 7" in printed
+        db.close()
+
+
+# ============================================================
+# 15. בדיקות שירות הזמנות (TestOrderService)
+# ============================================================
+
+class TestOrderService:
+
+    def test_get_next_saturday_returns_dd_mm_yyyy_format(self):
+        """get_next_saturday מחזיר מחרוזת בפורמט DD/MM/YYYY."""
+        saturday = get_next_saturday()
+        import re
+        assert re.match(r"^\d{2}/\d{2}/\d{4}$", saturday)
+
+    def test_get_next_saturday_from_friday_returns_next_day(self):
+        """מיום שישי — השבת הקרובה היא למחרת."""
+        with patch("services.order_service.date") as mock_date:
+            mock_date.today.return_value = date(2026, 4, 3)  # שישי
+            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+            saturday = get_next_saturday()
+            from datetime import datetime
+            d = datetime.strptime(saturday, "%d/%m/%Y").date()
+            assert d == date(2026, 4, 4)
+
+    def test_get_next_saturday_from_monday_returns_same_week_saturday(self):
+        """מיום שני — השבת הקרובה היא באותו שבוע."""
+        with patch("services.order_service.date") as mock_date:
+            mock_date.today.return_value = date(2026, 3, 30)  # שני
+            mock_date.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+            saturday = get_next_saturday()
+            from datetime import datetime
+            d = datetime.strptime(saturday, "%d/%m/%Y").date()
+            assert d == date(2026, 4, 4)
+
+    def test_create_order_returns_order_with_correct_total_price(self):
+        """create_order מחזיר Order עם total_price נכון."""
+        from services.order_service import create_order
+        db = SessionLocal()
+        customer = Customer(phone_number="+972500088001", name="בדיקה")
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+
+        jachnun = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        cart = {jachnun.id: 2}  # 2 x 25 = 50
+        order = create_order(
+            customer=customer,
+            cart=cart,
+            pickup_time="09:00",
+            delivery_type="איסוף עצמי",
+            delivery_cost=0.0,
+            db=db,
+        )
+        total = order.total_price
+        db.close()
+        assert total == 50.0
+
+    def test_create_order_with_delivery_address_none_saves_none(self):
+        """create_order עם delivery_address=None שומר None."""
+        from services.order_service import create_order
+        db = SessionLocal()
+        customer = Customer(phone_number="+972500088002", name="בדיקה 2")
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+
+        jachnun = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        cart = {jachnun.id: 1}
+        order = create_order(
+            customer=customer,
+            cart=cart,
+            pickup_time="09:00",
+            delivery_type="איסוף עצמי",
+            delivery_cost=0.0,
+            delivery_address=None,
+            db=db,
+        )
+        addr = order.delivery_address
+        db.close()
+        assert addr is None
+
+    def test_create_order_with_delivery_address_saves_address(self):
+        """create_order עם delivery_address שומר את הכתובת."""
+        from services.order_service import create_order
+        db = SessionLocal()
+        customer = Customer(phone_number="+972500088003", name="בדיקה 3")
+        db.add(customer)
+        db.commit()
+        db.refresh(customer)
+
+        jachnun = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
+        cart = {jachnun.id: 1}
+        order = create_order(
+            customer=customer,
+            cart=cart,
+            pickup_time="09:00",
+            delivery_type="משלוח להוד השרון",
+            delivery_cost=15.0,
+            delivery_address="רחוב הרצל 1, הוד השרון",
+            db=db,
+        )
+        addr = order.delivery_address
+        db.close()
+        assert addr == "רחוב הרצל 1, הוד השרון"
+
+
+# ============================================================
+# 16. בדיקות תוכן תפריט (TestMenuContent)
+# ============================================================
+
+class TestMenuContent:
+
+    def _get_menu_reply(self):
+        handle_message(PHONE, "היי")
+        return handle_message(PHONE, "תפריט")
+
+    def test_menu_shows_jachnun_price_25(self):
+        """התפריט מציג ₪25 לג'חנון."""
+        reply = self._get_menu_reply()
+        assert "25" in reply
+
+    def test_menu_shows_kubane_price_20(self):
+        """התפריט מציג ₪20 לקובנייה."""
+        reply = self._get_menu_reply()
+        assert "20" in reply
+
+    def test_menu_shows_description_with_beitsa(self):
+        """התפריט מציג תיאור עם ביצה."""
+        reply = self._get_menu_reply()
+        assert "ביצה" in reply
+
+    def test_menu_shows_description_with_risek(self):
+        """התפריט מציג תיאור עם רסק."""
+        reply = self._get_menu_reply()
+        assert "רסק" in reply
+
+    def test_menu_shows_ordering_instructions(self):
+        """התפריט מציג הוראות הזמנה."""
+        reply = self._get_menu_reply()
+        assert "כתוב" in reply
+        assert "סיום" in reply
+
+
+# ============================================================
+# 17. בדיקות קצה לקלט עברי (TestHebrewEdgeCases)
+# ============================================================
+
+class TestHebrewEdgeCases:
+
+    def test_body_with_only_spaces_treated_as_unknown(self):
+        """גוף עם רווחים בלבד — מטופל כהודעה לא מוכרת."""
+        handle_message(PHONE, "היי")
+        # במצב BROWSING_MENU, "   " לא מוכר
+        reply = handle_message(PHONE, "   ")
+        assert "לא הבנתי" in reply
+
+    def test_very_long_name_accepted(self):
+        """שם ארוך (50+ תווים) מתקבל."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")
+        long_name = "א" * 55
+        reply = handle_message(PHONE, long_name)
+        assert long_name in reply
+        assert get_state(PHONE) == ChatState.AWAITING_PICKUP_TIME
+
+    def test_address_with_numbers_accepted(self):
+        """כתובת עם מספרים מתקבלת."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "2")
+        reply = handle_message(PHONE, "רחוב 123 מספר 45")
+        assert "123" in reply or "45" in reply
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
+    def test_pickup_time_0800_accepted(self):
+        """שעת איסוף '08:00' מתקבלת."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "שם")
+        reply = handle_message(PHONE, "08:00")
+        assert "08:00" in reply
+        assert get_state(PHONE) == ChatState.CONFIRMING_ORDER
+
+    def test_pickup_time_1130_accepted(self):
+        """שעת איסוף '11:30' מתקבלת."""
+        handle_message(PHONE, "היי")
+        handle_message(PHONE, "הזמנה")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "סיום")
+        handle_message(PHONE, "1")
+        handle_message(PHONE, "שם")
+        reply = handle_message(PHONE, "11:30")
+        assert "11:30" in reply
+        assert get_state(PHONE) == ChatState.CONFIRMING_ORDER
