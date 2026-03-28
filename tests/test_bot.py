@@ -830,8 +830,8 @@ class TestEdgeCases:
         """session חדש מתחיל במצב GREETING."""
         assert get_state(PHONE) == ChatState.GREETING
 
-    def test_jachnun_is_pareve(self):
-        """ג'חנון הוא פרווה."""
+    def test_jachnun_is_not_dairy(self):
+        """ג'חנון הוא לא חלבי."""
         db = SessionLocal()
         item = db.query(MenuItem).filter(MenuItem.name == "ג'חנון").first()
         db.close()

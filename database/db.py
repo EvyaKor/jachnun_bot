@@ -36,7 +36,7 @@ def seed_menu():
             # מנות עיקריות
             MenuItem(
                 name="ג'חנון",
-                description="ג'חנון פרווה חם וטרי, מוגש עם רסק עגניות, ביצה וסחוג",
+                description="ג'חנון חם וטרי, מוגש עם רסק עגניות, ביצה וסחוג",
                 price=25.0,
                 is_dairy=False,
                 is_available=True,
