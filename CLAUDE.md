@@ -151,7 +151,7 @@ jachnun_bot/
 
 - **Platform:** Render (free tier)
 - **Keep-alive:** `RENDER_EXTERNAL_URL` env var → pings `/` every 14 min
-- **CRITICAL:** SQLite file resets on every Render redeploy — migrate to Postgres before going live with real customers
+- **Database:** PostgreSQL on Render (free tier) — `DATABASE_URL` env var set in Render dashboard, data persists across deploys
 - **Twilio sandbox:** Set webhook URL to `https://<render-url>/webhook`
 - **Gabriel's phone:** `whatsapp:+972539475881` (hardcoded in order_service.py — move to `.env` if needed)
 
@@ -163,7 +163,7 @@ jachnun_bot/
 - [x] Full project scaffolded and deployed
 - [x] DB-backed state machine
 - [x] Dynamic menu from DB
-- [x] Full ordering flow (cart → delivery → address → name → time → confirm)
+- [x] Full ordering flow (cart → delivery → address → name → time → confirm → payment)
 - [x] Address validation (≥2 words + digit)
 - [x] Automatic order cutoff (Friday 11:00 AM, all Saturday)
 - [x] Admin dashboard with ✅/❌ per order, revenue stats
@@ -171,8 +171,9 @@ jachnun_bot/
 - [x] Israel timezone (Asia/Jerusalem) for all date/time logic
 - [x] ~190 passing tests with time-mocked fixtures
 - [x] System audit: removed dead code, fixed images-when-closed bug, updated type hints
+- [x] Migrated DB to PostgreSQL (Render Postgres free tier) — data persists across deploys
+- [x] Admin dashboard mobile-first redesign (iPhone optimized, auto-refresh, clickable phone)
 
 ### Up Next
-- [ ] Migrate DB to Postgres (Render Postgres add-on) before going live
-- [ ] Real customer onboarding
+- [ ] Real customer onboarding + end-to-end test with real WhatsApp messages
 - [ ] Optional: SMS fallback if WhatsApp unavailable
