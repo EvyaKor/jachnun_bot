@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ג'חנון אקספרס — ניהול הזמנות</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #fff8f0;
+      color: #2d2d2d;
+      padding: 20px;
+    }
+
+    header {
+      background: #c0392b;
+      color: white;
+      padding: 20px 24px;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header h1 { font-size: 1.5rem; }
+    header p  { font-size: 0.9rem; opacity: 0.85; margin-top: 4px; }
+
+    .stats {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+
+    .stat-card {
+      background: white;
+      border-radius: 10px;
+      padding: 16px 20px;
+      flex: 1;
+      min-width: 130px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+      text-align: center;
+    }
+
+    .stat-card .number { font-size: 2rem; font-weight: bold; color: #c0392b; }
+    .stat-card .label  { font-size: 0.85rem; color: #888; margin-top: 4px; }
+
+    .saturday-group { margin-bottom: 32px; }
+
+    .saturday-title {
+      font-size: 1.1rem;
+      font-weight: bold;
+      color: #c0392b;
+      border-bottom: 2px solid #c0392b;
+      padding-bottom: 8px;
+      margin-bottom: 12px;
+    }
+
+    .order-card {
+      background: white;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .order-info { flex: 1; }
+    .order-id   { font-size: 0.8rem; color: #aaa; margin-bottom: 4px; }
+    .order-name { font-weight: bold; font-size: 1rem; }
+    .order-phone{ font-size: 0.85rem; color: #666; margin-top: 2px; }
+    .order-time { font-size: 0.85rem; color: #444; margin-top: 6px; }
+
+    .order-items {
+      font-size: 0.85rem;
+      color: #444;
+      margin-top: 6px;
+      line-height: 1.6;
+    }
+
+    .order-total {
+      font-weight: bold;
+      color: #c0392b;
+      margin-top: 6px;
+    }
+
+    .status-badge {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      font-weight: bold;
+      white-space: nowrap;
+    }
+
+    .status-ממתין  { background: #fff3cd; color: #856404; }
+    .status-אושר   { background: #d1e7dd; color: #155724; }
+    .status-בוטל   { background: #f8d7da; color: #721c24; }
+
+    .actions { display: flex; gap: 8px; align-items: center; flex-direction: column; }
+
+    .btn {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: bold;
+      width: 80px;
+    }
+
+    .btn-confirm { background: #198754; color: white; }
+    .btn-cancel  { background: #dc3545; color: white; }
+
+    .empty { text-align: center; color: #aaa; padding: 40px; font-size: 1rem; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div style="font-size:2rem">🫓</div>
+  <div>
+    <h1>ג'חנון אקספרס — לוח ניהול</h1>
+    <p>שלום גבריאל! כאן כל ההזמנות שלך</p>
+  </div>
+</header>
+
+<!-- סטטיסטיקות -->
+<div class="stats">
+  <div class="stat-card">
+    <div class="number">{{ total_orders }}</div>
+    <div class="label">הזמנות בסה"כ</div>
+  </div>
+  <div class="stat-card">
+    <div class="number">{{ pending_orders }}</div>
+    <div class="label">ממתינות לאישור</div>
+  </div>
+  <div class="stat-card">
+    <div class="number">₪{{ total_revenue }}</div>
+    <div class="label">הכנסה צפויה</div>
+  </div>
+  <div class="stat-card">
+    <div class="number">{{ next_saturday }}</div>
+    <div class="label">שבת קרובה</div>
+  </div>
+</div>
+
+<!-- הזמנות מקובצות לפי שבת -->
+{% if grouped_orders %}
+  {% for saturday_date, orders in grouped_orders.items() %}
+  <div class="saturday-group">
+    <div class="saturday-title">📅 שבת {{ saturday_date }} — {{ orders|length }} הזמנות</div>
+
+    {% for order in orders %}
+    <div class="order-card">
+      <div class="order-info">
+        <div class="order-id">הזמנה #{{ order.id }}</div>
+        <div class="order-name">{{ order.customer.name or 'לא צוין' }}</div>
+        <div class="order-phone">📱 {{ order.customer.phone_number }}</div>
+        <div class="order-time">🕗 איסוף בשעה {{ order.pickup_time }}</div>
+        <div class="order-items">
+          {% for item in order.items %}
+            {{ item.menu_item.name }} x{{ item.quantity }}<br>
+          {% endfor %}
+        </div>
+        <div class="order-total">💰 ₪{{ "%.0f"|format(order.total_price) }}</div>
+      </div>
+
+      <div class="actions">
+        <span class="status-badge status-{{ order.status }}">{{ order.status }}</span>
+        {% if order.status == "ממתין" %}
+          <form method="post" action="/admin/update/{{ order.id }}">
+            <input type="hidden" name="status" value="אושר">
+            <button class="btn btn-confirm">✅ אשר</button>
+          </form>
+          <form method="post" action="/admin/update/{{ order.id }}">
+            <input type="hidden" name="status" value="בוטל">
+            <button class="btn btn-cancel">❌ בטל</button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">אין הזמנות עדיין 🕊️</div>
+{% endif %}
+
+</body>
+</html>

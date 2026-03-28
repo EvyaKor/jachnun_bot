@@ -4,9 +4,10 @@
 """
 
 from sqlalchemy.orm import Session
-from database.models import Customer, MenuItem, Order, OrderItem
+from database.models import Customer, MenuItem
 from database.db import SessionLocal
 from state_machine import ChatState, get_session, get_state, set_state, reset_session
+from services.order_service import create_order, notify_gabriel, get_next_saturday
 
 BUSINESS_INFO = {
     "name": "ג'חנון אקספרס",
@@ -22,7 +23,8 @@ MENU_TEXT = (
     "   מוגש עם רסק, ביצה וסחוג 🍅🥚\n\n"
     "2️⃣ קובנייה (חלבי) — ₪15\n"
     "   מוגשת עם רסק, ביצה וסחוג 🍅🥚\n\n"
-    "כתוב *1* להזמין ג'חנון, *2* להזמין קובנייה\n"
+    "כתוב *1* להזמין ג'חנון\n"
+    "כתוב *2* להזמין קובנייה\n"
     "כתוב *סיום* לסיים את ההזמנה"
 )
 
@@ -85,7 +87,10 @@ def handle_message(phone: str, body: str) -> str:
                 return MENU_TEXT
             if body == "הזמנה":
                 set_state(phone, ChatState.ADDING_ITEMS)
-                return MENU_TEXT + "\n\nכתוב את מספר הפריט כדי להוסיף לסל:"
+                return (
+                    f"מעולה! ההזמנה תהיה לשבת ה-{get_next_saturday()} 📅\n\n"
+                    + MENU_TEXT
+                )
 
         # ---- מצב: הוספת פריטים לסל ----
         if state == ChatState.ADDING_ITEMS:
@@ -111,19 +116,22 @@ def handle_message(phone: str, body: str) -> str:
         if state == ChatState.AWAITING_NAME:
             session["name"] = body
             set_state(phone, ChatState.AWAITING_PICKUP_TIME)
-            return f"תודה {body}! 😊\n\nבאיזו שעה תרצה לאסוף? (איסוף אפשרי החל מ-08:00)"
+            return f"תודה {body}! 😊\n\nבאיזו שעה תרצה לאסוף ביום שבת? (איסוף מ-08:00 עד גמר המלאי)"
 
         # ---- מצב: ממתין לשעת איסוף ----
         if state == ChatState.AWAITING_PICKUP_TIME:
             session["pickup_time"] = body
             set_state(phone, ChatState.CONFIRMING_ORDER)
             cart_text = format_cart(session["cart"], db)
+            next_saturday = get_next_saturday()
             return (
                 f"{cart_text}\n\n"
                 f"👤 שם: {session['name']}\n"
+                f"📅 תאריך: שבת {next_saturday}\n"
                 f"🕗 שעת איסוף: {body}\n"
                 f"📍 {BUSINESS_INFO['address']}\n\n"
-                f"לאישור ההזמנה כתוב *אישור*\nלביטול כתוב *ביטול*"
+                f"לאישור כתוב *אישור* ✅\n"
+                f"לביטול כתוב *ביטול* ❌"
             )
 
         # ---- מצב: אישור הזמנה ----
@@ -133,34 +141,24 @@ def handle_message(phone: str, body: str) -> str:
                 customer.name = session["name"]
                 db.commit()
 
-                total = sum(
-                    db.query(MenuItem).filter(MenuItem.id == item_id).first().price * qty
-                    for item_id, qty in session["cart"].items()
-                )
-
-                order = Order(
-                    customer_id=customer.id,
+                order = create_order(
+                    customer=customer,
+                    cart=session["cart"],
                     pickup_time=session["pickup_time"],
-                    total_price=total,
-                    status="ממתין",
+                    db=db,
                 )
-                db.add(order)
-                db.commit()
-                db.refresh(order)
 
-                for item_id, qty in session["cart"].items():
-                    order_item = OrderItem(order_id=order.id, menu_item_id=item_id, quantity=qty)
-                    db.add(order_item)
-                db.commit()
-
+                notify_gabriel(order, customer, session["cart"], db)
                 reset_session(phone)
+
                 return (
                     f"✅ *ההזמנה שלך אושרה!*\n\n"
                     f"מספר הזמנה: #{order.id}\n"
-                    f"סה\"כ לתשלום: ₪{total:.0f}\n"
-                    f"שעת איסוף: {session['pickup_time'] if session.get('pickup_time') else body}\n"
+                    f"📅 שבת {order.pickup_date}\n"
+                    f"🕗 שעת איסוף: {order.pickup_time}\n"
+                    f"💰 סה\"כ לתשלום: ₪{order.total_price:.0f}\n"
                     f"📍 {BUSINESS_INFO['address']}\n\n"
-                    f"מחכים לך! ❤️"
+                    f"מחכים לך! ❤️🫓"
                 )
 
             if body == "ביטול":
