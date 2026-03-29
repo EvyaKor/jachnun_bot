@@ -50,7 +50,7 @@ ORDERS_CLOSED_MSG = (
     "ההזמנות לשבת הקרובה נסגרו 🙏\n\n"
     "ניתן ליצור קשר ישירות בטלפון לבדיקת זמינות:\n"
     f"📱 *{GABRIEL_PAYMENT_PHONE}*\n\n"
-    "נשמח לראותכם בשבוע הבא! ❤️🫓"
+    "נשמח לראותכם בשבוע הבא! ❤️🥙"
 )
 
 
@@ -110,7 +110,7 @@ def build_welcome_with_menu(db: Session) -> str:
     """הודעת ברוכים הבאים + תפריט מלא."""
     next_sat = get_next_saturday()
     header = (
-        f"ברוכים הבאים לג'חנון אקספרס! ☀️🫓\n\n"
+        f"ברוכים הבאים לג'חנון אקספרס! ☀️🥙\n\n"
         f"ג'חנונים וקובניות טריים, חמים ומפנקים 😍\n"
         f"📍 {BUSINESS_INFO['address']}\n"
         f"🗓️ ההזמנה תהיה לשבת *{next_sat}*\n\n"
@@ -446,7 +446,7 @@ def handle_message(phone: str, body: str) -> str:
                     f"📱 *{GABRIEL_PAYMENT_PHONE}*\n"
                 )
 
-            confirmation += "\nמחכים לך! ❤️🫓"
+            confirmation += "\nמחכים לך! ❤️🥙"
             return confirmation
 
         # ════ ברירת מחדל ════

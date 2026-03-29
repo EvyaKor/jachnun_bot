@@ -47,7 +47,7 @@ async def startup():
 @app.get("/")
 def root():
     """בדיקת חיים."""
-    return {"status": "פעיל", "service": "ג'חנון אקספרס 🫓"}
+    return {"status": "פעיל", "service": "ג'חנון אקספרס 🥙"}
 
 
 @app.get("/health")
@@ -106,7 +106,7 @@ def _build_admin_html(
 
     # ── סיכום הכנה ──
     prep_items = {
-        "ג'חנון": ("🫓", prep.get("ג'חנון", 0)),
+        "ג'חנון": ("🥙", prep.get("ג'חנון", 0)),
         "קובנייה": ("🧀", prep.get("קובנייה", 0)),
         "ביצה נוספת": ("🥚", prep.get("ביצה נוספת", 0)),
         "רסק עגניות + סחוג": ("🍅", prep.get("רסק עגניות + סחוג", 0)),
@@ -244,7 +244,7 @@ def _build_admin_html(
 <body>
   <div class='header'>
     <div class='header-top'>
-      <div class='header-icon'>🫓</div>
+      <div class='header-icon'>🥙</div>
       <h1>ג'חנון אקספרס</h1>
     </div>
     <div class='header-sub'>שלום גבריאל! שבת הקרובה: {next_sat}</div>
