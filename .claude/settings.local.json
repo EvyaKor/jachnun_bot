@@ -7,7 +7,19 @@
       "Bash(git push:*)",
       "Bash(python -m pytest tests/test_bot.py -v)",
       "Bash(source venv/Scripts/activate)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(python -m pytest tests/test_bot.py::TestSaturdayLogic tests/test_bot.py::TestOrderService -v)",
+      "Bash(python -c \":*)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:npmjs.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(cp -r \"C:/Users/evyat/.claude/skills/_anthropics_repo/skills/skill-creator\" \"C:/Users/evyat/.claude/skills/\")",
+      "Bash(cp -r \"C:/Users/evyat/.claude/skills/_anthropics_repo/skills/frontend-design\" \"C:/Users/evyat/.claude/skills/\")",
+      "Bash(cp -r \"C:/Users/evyat/.claude/skills/_anthropics_repo/skills/webapp-testing\" \"C:/Users/evyat/.claude/skills/\")",
+      "Bash(cp -r \"C:/Users/evyat/.claude/skills/_anthropics_repo/skills/mcp-builder\" \"C:/Users/evyat/.claude/skills/\")",
+      "Bash(cp -r \"C:/Users/evyat/.claude/skills/_anthropics_repo/skills/pdf\" \"C:/Users/evyat/.claude/skills/\")",
+      "Bash(python -m pytest tests/test_bot.py -x -q)"
     ]
   }
 }
