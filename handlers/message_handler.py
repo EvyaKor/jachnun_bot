@@ -100,8 +100,8 @@ def build_menu_text(db: Session) -> str:
             lines.append(f"{EMOJI_NUMBERS[offset + idx]} {item.name} — ₪{item.price:.0f}")
 
     lines.append("\n*כתוב מספר להוסיף לסל*")
-    lines.append("*סיום* — לסיום הבחירה")
-    lines.append("*ביטול* — לביטול ההזמנה")
+    lines.append("\u200F*סיום* — לסיום הבחירה")
+    lines.append("\u200F*ביטול* — לביטול ההזמנה")
 
     return "\n".join(lines)
 
