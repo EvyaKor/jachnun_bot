@@ -174,7 +174,7 @@ def _build_admin_html(
             orders_html += "</div>"
 
     status_bar_cls = "status-open" if not orders_closed else "status-closed"
-    status_bar_txt = "🟢 הזמנות פתוחות" if not orders_closed else "🔴 הזמנות סגורות (נפתחות ביום ראשון)"
+    status_bar_txt = "🟢 הזמנות פתוחות — נסגרות שישי ב-11:00" if not orders_closed else "🔴 הזמנות סגורות — נפתחות ביום ראשון"
     tab_current = "tab-active" if not show_history else "tab"
     tab_history = "tab-active" if show_history else "tab"
 
