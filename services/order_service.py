@@ -15,7 +15,7 @@ ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
 load_dotenv()
 
-GABRIEL_PHONE = "whatsapp:+972539475881"
+GABRIEL_PHONE = os.getenv("GABRIEL_PHONE", "whatsapp:+972539475881")
 TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
@@ -94,7 +94,7 @@ def create_order(
     return order
 
 
-def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session):
+def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session, payment_method: str | None = None):
     """
     שולח הודעת וואטסאפ לגבריאל עם פרטי ההזמנה החדשה.
     אם Twilio לא מוגדר — מדפיס ללוג בלבד.
@@ -114,6 +114,8 @@ def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session):
             lines.append(f"  {item.name} x{qty}")
 
     lines.append(f"\n💰 סה\"כ: ₪{order.total_price:.0f}")
+    if payment_method:
+        lines.append(f"💳 תשלום: {payment_method}")
 
     message_body = "\n".join(lines)
 

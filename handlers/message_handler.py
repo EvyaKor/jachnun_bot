@@ -3,6 +3,7 @@
 תפריט דינמי מ-DB, מכונת מצבים חסינה, ביטול גלובלי בכל שלב.
 """
 
+import os
 from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem
 from database.db import SessionLocal
@@ -19,7 +20,7 @@ BUSINESS_INFO = {
     "address": "בני ברית 17, הוד השרון",
 }
 
-GABRIEL_PAYMENT_PHONE = "054-2380330"
+GABRIEL_PAYMENT_PHONE = os.getenv("GABRIEL_PAYMENT_PHONE", "054-2380330")
 
 DELIVERY_OPTIONS = {
     "1": {"label": "איסוף עצמי", "cost": 0.0},
@@ -426,7 +427,7 @@ def handle_message(phone: str, body: str) -> str:
                 delivery_address=session.get("delivery_address"),
                 db=db,
             )
-            notify_gabriel(order, customer, session["cart"], db)
+            notify_gabriel(order, customer, session["cart"], db, session.get("payment_method"))
             reset_session(phone)
 
             confirmation = (

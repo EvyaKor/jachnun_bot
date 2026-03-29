@@ -50,6 +50,12 @@ def root():
     return {"status": "פעיל", "service": "ג'חנון אקספרס 🫓"}
 
 
+@app.get("/health")
+def health():
+    """נקודת קצה לבדיקת בריאות — משמשת את Render keep-alive."""
+    return {"status": "ok"}
+
+
 @app.post("/webhook")
 async def whatsapp_webhook(
     From: str = Form(...),
