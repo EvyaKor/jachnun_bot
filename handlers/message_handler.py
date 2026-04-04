@@ -15,6 +15,7 @@ GITHUB_RAW = "https://raw.githubusercontent.com/EvyaKor/jachnun_bot/main/images"
 PRODUCT_IMAGES = [
     f"{GITHUB_RAW}/image1.jpg",
     f"{GITHUB_RAW}/image2.jpg",
+    f"{GITHUB_RAW}/image3.jpg",
 ]
 
 BUSINESS_INFO = {

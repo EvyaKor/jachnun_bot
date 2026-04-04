@@ -1592,8 +1592,8 @@ class TestWebhookTwiML:
             pytest.fail("תשובת ה-webhook אינה XML תקין")
         reset_session(phone)
 
-    def test_webhook_greeting_has_two_media_images(self):
-        """ברכה ראשונה מכילה 2 תמונות."""
+    def test_webhook_greeting_has_three_media_images(self):
+        """ברכה ראשונה מכילה 3 תמונות."""
         phone = "+972510001005"
         reset_session(phone)
         response = self.client.post("/webhook", data={
@@ -1601,9 +1601,8 @@ class TestWebhookTwiML:
             "Body": "היי"
         })
         assert response.status_code == 200
-        # בדיקה שה-XML מכיל לפחות 2 הפניות לתמונות
         from handlers.message_handler import PRODUCT_IMAGES
-        assert len(PRODUCT_IMAGES) == 2
+        assert len(PRODUCT_IMAGES) == 3
         for img_url in PRODUCT_IMAGES:
             assert img_url in response.text
         reset_session(phone)
