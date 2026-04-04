@@ -59,6 +59,8 @@ class Order(Base):
     notes = Column(Text, nullable=True)
     total_price = Column(Float, default=0.0)
     created_at = Column(DateTime, default=datetime.utcnow)
+    # M4: עדכון אוטומטי בכל שינוי סטטוס — נדרש ALTER TABLE בפרודקשן קיים
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
 
     customer = relationship("Customer", back_populates="orders")
     items = relationship("OrderItem", back_populates="order")

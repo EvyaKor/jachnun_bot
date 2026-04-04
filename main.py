@@ -4,9 +4,11 @@
 כולל דשבורד ניהול להזמנות לגבריאל.
 """
 
-from fastapi import FastAPI, Form, Query
+from fastapi import FastAPI, Form, Query, Request, HTTPException, Depends
 from fastapi.responses import Response, HTMLResponse, RedirectResponse
+import base64 as _base64
 from twilio.twiml.messaging_response import MessagingResponse
+from twilio.request_validator import RequestValidator
 from database.db import init_db, seed_menu, SessionLocal
 from database.models import Order, OrderItem
 from sqlalchemy.orm import joinedload
@@ -16,7 +18,67 @@ from services.order_service import get_next_saturday, is_orders_closed
 from collections import defaultdict
 import asyncio
 import httpx
+import logging
 import os
+import secrets
+import time
+
+# ── Logging מרכזי (C4) ──────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── קבועים ──────────────────────────────────────────────────────────────────
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "גבריאל")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "גבריאל123")
+VALID_STATUSES = {"ממתין", "אושר", "בוטל"}
+MAX_MESSAGES_PER_MINUTE = 15   # M1: הגבלת קצב הודעות לכל מספר טלפון
+RATE_LIMIT_WINDOW = 60         # שניות
+
+# ── Rate limiter פשוט בזיכרון (M1) ─────────────────────────────────────────
+_rate_store: dict = defaultdict(list)
+
+
+def _is_rate_limited(phone: str) -> bool:
+    """מחזיר True אם המספר חרג ממגבלת ההודעות בדקה האחרונה."""
+    now = time.time()
+    _rate_store[phone] = [t for t in _rate_store[phone] if now - t < RATE_LIMIT_WINDOW]
+    if len(_rate_store[phone]) >= MAX_MESSAGES_PER_MINUTE:
+        return True
+    _rate_store[phone].append(now)
+    return False
+
+# ── אימות דשבורד (C2) ───────────────────────────────────────────────────────
+# FastAPI's HTTPBasic decodes credentials as ASCII only — Hebrew requires UTF-8.
+# Using manual header parsing per RFC 7617 with charset="UTF-8".
+_WWW_AUTH = 'Basic realm="Jachnun Express", charset="UTF-8"'
+
+
+def _verify_admin(request: Request):
+    """מוודא שם משתמש וסיסמה בעברית — מפענח Base64 כ-UTF-8 (לא ASCII)."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        raise HTTPException(
+            status_code=401,
+            headers={"WWW-Authenticate": _WWW_AUTH},
+        )
+    try:
+        decoded = _base64.b64decode(auth[6:]).decode("utf-8")
+        username, _, password = decoded.partition(":")
+    except Exception:
+        raise HTTPException(status_code=401, headers={"WWW-Authenticate": _WWW_AUTH})
+
+    username_ok = secrets.compare_digest(username.encode("utf-8"), ADMIN_USERNAME.encode("utf-8"))
+    password_ok = secrets.compare_digest(password.encode("utf-8"), ADMIN_PASSWORD.encode("utf-8"))
+    if not (username_ok and password_ok):
+        raise HTTPException(
+            status_code=401,
+            detail="שם משתמש או סיסמה שגויים",
+            headers={"WWW-Authenticate": _WWW_AUTH},
+        )
 
 app = FastAPI(title="ג'חנון אקספרס", version="1.0.0")
 
@@ -58,14 +120,43 @@ def health():
 
 @app.post("/webhook")
 async def whatsapp_webhook(
+    request: Request,
     From: str = Form(...),
     Body: str = Form(...),
 ):
     """מקבל הודעת וואטסאפ מ-Twilio ומחזיר תשובה."""
+    # ── C1: אימות חתימת Twilio (רק בפרודקשן כשהטוקן מוגדר) ──
+    if TWILIO_AUTH_TOKEN:
+        validator = RequestValidator(TWILIO_AUTH_TOKEN)
+        form_data = await request.form()
+        signature = request.headers.get("X-Twilio-Signature", "")
+        url = str(request.url)
+        if not validator.validate(url, dict(form_data), signature):
+            logger.warning(f"חתימת Twilio לא תקינה — IP: {request.client.host}")
+            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+
     phone = From.replace("whatsapp:", "").strip()
-    body = Body.strip()
-    was_greeting = get_state(phone) == ChatState.GREETING
-    reply = handle_message(phone, body)
+    body = Body.strip()[:500]  # הגבלת אורך קלט
+
+    # ── M1: Rate limiting ─────────────────────────────────────────────────────
+    if _is_rate_limited(phone):
+        logger.warning(f"Rate limit חרג — {phone}")
+        resp = MessagingResponse()
+        resp.message("יותר מדי הודעות. המתן דקה ונסה שוב.")
+        return Response(content=str(resp), media_type="application/xml")
+
+    logger.info(f"הודעה נכנסת מ-{phone}: {body[:80]}")
+
+    # ── C5: טיפול בשגיאות — מחזיר הודעה ידידותית במקום קריסה ──
+    was_greeting = False
+    try:
+        was_greeting = get_state(phone) == ChatState.GREETING
+        reply = handle_message(phone, body)
+    except Exception:
+        logger.exception(f"שגיאה בעיבוד הודעה מ-{phone}")
+        reply = "מצטערים, אירעה שגיאה טכנית. נא לנסות שוב בעוד כמה שניות."
+
+    logger.info(f"תשובה ל-{phone}: {reply[:80]}")
     response = MessagingResponse()
     response.message(reply)
     if was_greeting and get_state(phone) == ChatState.ADDING_ITEMS:
@@ -75,10 +166,10 @@ async def whatsapp_webhook(
 
 
 def _calc_prep(orders: list) -> dict:
-    """מחשב כמויות הכנה מצטברות מרשימת הזמנות (לא בוטלות)."""
+    """מחשב כמויות הכנה מצטברות — רק הזמנות שאושרו (לא ממתינות ולא מבוטלות)."""
     totals = {}
     for order in orders:
-        if order.status == "בוטל":
+        if order.status != "אושר":  # M6: ספור רק הזמנות מאושרות
             continue
         for oi in order.items:
             name = oi.menu_item.name
@@ -275,7 +366,7 @@ def _build_admin_html(
 
 
 @app.get("/admin", response_class=HTMLResponse)
-def admin_dashboard(history: int = Query(default=0)):
+def admin_dashboard(history: int = Query(default=0), _: None = Depends(_verify_admin)):
     """דשבורד ניהול להזמנות — מיועד לגבריאל.
     ברירת מחדל: שבת הקרובה בלבד. ?history=1 להצגת כל ההיסטוריה.
     """
@@ -325,12 +416,19 @@ def admin_dashboard(history: int = Query(default=0)):
 
 
 @app.post("/admin/update/{order_id}")
-def update_order_status(order_id: int, status: str = Form(...)):
+def update_order_status(
+    order_id: int,
+    status: str = Form(...),
+    _: None = Depends(_verify_admin),
+):
     """מעדכן סטטוס הזמנה מהדשבורד."""
+    if status not in VALID_STATUSES:
+        raise HTTPException(status_code=400, detail=f"סטטוס לא חוקי: {status}")
     db = SessionLocal()
     try:
         order = db.query(Order).filter(Order.id == order_id).first()
         if order:
+            logger.info(f"עדכון הזמנה #{order_id}: {order.status} → {status}")
             order.status = status
             db.commit()
     finally:

@@ -21,10 +21,12 @@ WhatsApp user → Twilio → POST /webhook → FastAPI → handle_message()
 ```
 
 - **Webhook:** `POST /webhook` receives Twilio form fields (`From`, `Body`), returns TwiML XML
+- **Twilio signature validation:** `X-Twilio-Signature` header verified on every webhook request (only when `TWILIO_AUTH_TOKEN` is set — skipped in test env)
 - **State machine:** DB-backed — `current_state` + `temp_order_data` (JSON) on `Customer` row; in-memory cache (`_sessions` dict) with write-through to DB on every state change
 - **Menu:** Dynamic from DB (`MenuItem` table). `is_extra=True` for add-ons; mains listed first, extras after
-- **Admin dashboard:** `GET /admin` — orders grouped by Saturday date, with ✅ Confirm / ❌ Cancel buttons; auto-refreshes every 60s
+- **Admin dashboard:** `GET /admin` — HTTP Basic Auth protected (`ADMIN_PASSWORD` env var, default `gabriel123`). Orders grouped by Saturday date, with ✅ Confirm / ❌ Cancel buttons; auto-refreshes every 60s
 - **Keep-alive:** Pings `RENDER_EXTERNAL_URL/` every 14 min to prevent Render sleep
+- **Logging:** Centralized Python `logging` module across all files. Format: `%(asctime)s [%(levelname)s] %(name)s: %(message)s`
 
 ---
 
@@ -125,6 +127,8 @@ CHOOSING_PAYMENT
 
 **Menu seed** (`db.py`): ג'חנון ₪25, קובנייה ₪20 (חלבי), ביצה נוספת ₪3 (extra), רסק עגניות+סחוג ₪3 (extra)
 
+**DB connection (PostgreSQL):** `pool_pre_ping=True`, `pool_size=10`, `max_overflow=20`, `pool_recycle=3600`
+
 ---
 
 ## Environment Variables (`.env` / Render Dashboard)
@@ -133,11 +137,25 @@ CHOOSING_PAYMENT
 |---|---|---|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (Render Postgres) |
 | `TWILIO_ACCOUNT_SID` | Yes | Twilio credentials |
-| `TWILIO_AUTH_TOKEN` | Yes | Twilio credentials |
+| `TWILIO_AUTH_TOKEN` | Yes | Twilio credentials — also used for webhook signature validation |
 | `TWILIO_WHATSAPP_NUMBER` | No | Defaults to sandbox number |
-| `GABRIEL_PHONE` | No | Gabriel's WhatsApp (`whatsapp:+972...`), has default |
-| `GABRIEL_PAYMENT_PHONE` | No | Gabriel's payment phone shown to customers, has default |
+| `GABRIEL_PHONE` | Yes | Gabriel's WhatsApp (`whatsapp:+972...`) — set in Render dashboard |
+| `GABRIEL_PAYMENT_PHONE` | Yes | Gabriel's payment phone shown to customers — set in Render dashboard |
 | `RENDER_EXTERNAL_URL` | No | Enables keep-alive pings on Render |
+| `ADMIN_USERNAME` | No | שם משתמש לדשבורד (default: `גבריאל`) — set in Render dashboard |
+| `ADMIN_PASSWORD` | No | סיסמה לדשבורד (default: `גבריאל123`) — set in Render dashboard |
+
+---
+
+## Security Architecture
+
+| Layer | Implementation |
+|---|---|
+| Webhook auth | `X-Twilio-Signature` verified via `twilio.request_validator.RequestValidator` |
+| Admin dashboard | HTTP Basic Auth (UTF-8, custom parsing) — username + password נבדקים מול `ADMIN_USERNAME` / `ADMIN_PASSWORD`. ברירות מחדל: גבריאל / גבריאל123 |
+| Status validation | `POST /admin/update/{id}` only accepts `ממתין`, `אושר`, `בוטל` |
+| Input limits | `Body` capped at 500 chars before processing |
+| Error isolation | `handle_message()` wrapped in try/except — never exposes stack traces to users |
 
 ---
 
@@ -153,16 +171,20 @@ CHOOSING_PAYMENT
 8. **No "פרווה":** The business is not labeled pareve — never use this word anywhere in messages, menu, or UI
 9. **Hebrew RTL:** All user-facing messages are in Hebrew. Formatting must read right-to-left. Never mix Hebrew and English within a single sentence.
 10. **No magic numbers:** All business constants (delivery costs, minimum order, etc.) must be named constants at the top of the file
+11. **Logging:** Use `logger = logging.getLogger(__name__)` in every module. Never use `print()` for operational output.
+12. **DB transactions:** All multi-step DB writes use `db.flush()` + single `db.commit()` — never commit partial data.
 
 ---
 
 ## Testing (`tests/test_bot.py`)
 
-- **~190 tests** covering full conversation flows, edge cases, and cutoff logic
+- **190 tests** covering full conversation flows, edge cases, and cutoff logic
 - Uses `StaticPool` SQLite in-memory DB shared across test session
 - **autouse fixture** patches `handlers.message_handler.is_orders_closed` → `False` so tests don't depend on real day/time
 - `TestOrderCutoff`: patches `handlers.message_handler.is_orders_closed` directly per test
-- Run: `python -m pytest tests/test_bot.py -v`
+- **Admin tests**: `TestClient` initialized with `headers={"Authorization": "Basic <base64(admin:gabriel123)>"}` — required since dashboard is auth-protected
+- **Notification tests**: use `caplog.at_level(logging.WARNING, logger="services.order_service")` — not `patch("builtins.print")`
+- Run: `venv/Scripts/python.exe -m pytest tests/test_bot.py -v` (use project venv, not system Python)
 
 ---
 
@@ -175,17 +197,17 @@ jachnun_bot/
 ├── .env                        # secrets (gitignored)
 ├── .gitignore
 ├── requirements.txt
-├── main.py                     # FastAPI app, webhook, admin dashboard, /health
+├── main.py                     # FastAPI app, webhook (+Twilio signature validation), admin dashboard (+auth), /health
 ├── state_machine.py            # DB-backed state machine with in-memory cache
 ├── database/
 │   ├── models.py               # SQLAlchemy models
-│   └── db.py                   # DB engine, SessionLocal, seed_menu
+│   └── db.py                   # DB engine (pool_pre_ping), SessionLocal, seed_menu
 ├── services/
-│   └── order_service.py        # create_order, notify_gabriel, is_orders_closed, get_next_saturday
+│   └── order_service.py        # create_order (single transaction), notify_gabriel, is_orders_closed, get_next_saturday
 ├── handlers/
 │   └── message_handler.py      # handle_message — all chat state logic
 └── tests/
-    └── test_bot.py             # ~190 pytest tests
+    └── test_bot.py             # 190 pytest tests
 ```
 
 ---
@@ -200,6 +222,7 @@ jachnun_bot/
 | Twilio webhook | `https://<render-url>/webhook` |
 | Health check | `GET /health` → `{"status": "ok"}` |
 | Auto-deploy | On every `git push` to `main` |
+| Admin dashboard | `GET /admin` — HTTP Basic Auth required |
 
 ---
 
@@ -217,13 +240,36 @@ jachnun_bot/
 - [x] Automatic order cutoff (Friday 11:00 AM, all Saturday)
 - [x] Admin dashboard with ✅/❌ per order, revenue stats, mobile-first
 - [x] Israel timezone (Asia/Jerusalem) for all date/time logic
-- [x] ~190 passing tests with time-mocked fixtures
+- [x] 190 passing tests with time-mocked fixtures
 - [x] System audit: removed dead code, fixed images-when-closed bug
 - [x] Migrated DB to PostgreSQL (Render Postgres) — data persists across deploys
 - [x] Admin dashboard mobile-first redesign (iPhone optimized, auto-refresh, clickable phone)
 - [x] Phone numbers moved to env vars (GABRIEL_PHONE, GABRIEL_PAYMENT_PHONE)
 - [x] /health endpoint added
+- [x] **[Production Hardening — Phase 1]** Twilio webhook signature validation (C1)
+- [x] **[Production Hardening — Phase 1]** Admin dashboard HTTP Basic Auth (C2)
+- [x] **[Production Hardening — Phase 1]** DB transaction fix in create_order — single commit (C3)
+- [x] **[Production Hardening — Phase 1]** Centralized Python logging across all modules (C4)
+- [x] **[Production Hardening — Phase 1]** Webhook error handling — user-friendly Hebrew fallback (C5)
+- [x] **[Production Hardening — Phase 1]** N+1 query fix in create_order — batch MenuItem query (H1)
+- [x] **[Production Hardening — Phase 1]** PostgreSQL connection pool: pool_pre_ping, pool_size=10, max_overflow=20 (H2/H3)
+- [x] **[Production Hardening — Phase 1]** notify_gabriel uses logger instead of print (H5)
+- [x] **[Production Hardening — Phase 1]** Admin status update validated against whitelist
+- [x] **[Production Hardening — Phase 1]** Test suite updated: admin tests use Basic Auth, notification tests use caplog
 
-### Up Next
-- [ ] Add `GABRIEL_PHONE` and `GABRIEL_PAYMENT_PHONE` to Render env vars dashboard
+- [x] **[Production Hardening — Phase 2]** Rate limiting: 15 הודעות/דקה לכל מספר, in-memory (M1)
+- [x] **[Production Hardening — Phase 2]** ולידציה כתובת: דרישת תו עברי + `re` module (M2)
+- [x] **[Production Hardening — Phase 2]** requirements.txt עם גרסאות מדויקות (M3)
+- [x] **[Production Hardening — Phase 2]** `updated_at` על Order — נדרש `ALTER TABLE orders ADD COLUMN updated_at TIMESTAMP` ב-Render (M4)
+- [x] **[Production Hardening — Phase 2]** סיכום הכנה מציג רק הזמנות "אושר" (לא "ממתין") (M6)
+
+- [x] **[Production Hardening — Phase 3]** טסטים: `TestRateLimiting` (4 טסטים), `TestWebhookSecurity` (6 טסטים), `TestPrepCalculation` (3 טסטים) — סה"כ 206 טסטים
+- [x] **[Production Hardening — Phase 3]** טסטים: `TestAddressValidation` — 3 טסטים חדשים (אנגלית נדחית, ספרות בלבד, עברית קצרה)
+- [x] **[Production Hardening — Phase 3]** `.env.example` מלא — כולל `GABRIEL_PHONE`, `GABRIEL_PAYMENT_PHONE`, `RENDER_EXTERNAL_URL`, `ADMIN_PASSWORD`
+
+### Up Next — לפני Go-Live
+- [x] מיגרציה אוטומטית — `updated_at` נוסף ב-startup אם חסר (ללא Alembic, בטוח להרצה חוזרת)
+- [x] סיסמת דשבורד: גבריאל / גבריאל123 (UTF-8 Basic Auth, custom parsing עוקף מגבלת ASCII של FastAPI)
+- [ ] Set `ADMIN_USERNAME=גבריאל` + `ADMIN_PASSWORD=גבריאל123` in Render env vars dashboard
 - [ ] Real customer onboarding + end-to-end test with real WhatsApp messages
+- [ ] Switch from Twilio sandbox to Meta WhatsApp Cloud API (for real customers)

@@ -4,6 +4,7 @@
 """
 
 import os
+import re
 from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem
 from database.db import SessionLocal
@@ -165,12 +166,13 @@ def get_or_create_customer(phone: str, db: Session) -> Customer:
 
 def is_valid_address(address: str) -> bool:
     """
-    בודק שהכתובת מכילה לפחות רחוב ומספר (לא תיאור כללי כמו 'ליד המכולת').
-    דרישות: לפחות 2 מילים + לפחות ספרה אחת (מספר בית).
+    בודק שהכתובת מכילה לפחות רחוב ומספר בית עם תווים עבריים.
+    דרישות: לפחות 2 מילים + לפחות ספרה אחת (מספר בית) + לפחות תו עברי אחד.
     """
     words = address.strip().split()
     has_digit = any(char.isdigit() for char in address)
-    return len(words) >= 2 and has_digit
+    has_hebrew = bool(re.search(r"[\u05D0-\u05EA]", address))
+    return len(words) >= 2 and has_digit and has_hebrew
 
 
 # ── הטיפול הראשי ─────────────────────────────────────────────

@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem, Order, OrderItem
 from twilio.rest import Client
 import os
+import logging
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
@@ -66,10 +69,11 @@ def create_order(
     """
     pickup_date = get_next_saturday()
 
-    subtotal = sum(
-        db.query(MenuItem).filter(MenuItem.id == item_id).first().price * qty
-        for item_id, qty in cart.items()
-    )
+    # שאילתה אחת לכל הפריטים במקום N+1 (H1)
+    item_ids = list(cart.keys())
+    items = db.query(MenuItem).filter(MenuItem.id.in_(item_ids)).all()
+    item_map = {item.id: item.price for item in items}
+    subtotal = sum(item_map[item_id] * qty for item_id, qty in cart.items())
     total = subtotal + delivery_cost
 
     order = Order(
@@ -82,14 +86,19 @@ def create_order(
         total_price=total,
         status="ממתין",
     )
-    db.add(order)
-    db.commit()
-    db.refresh(order)
-
-    for item_id, qty in cart.items():
-        order_item = OrderItem(order_id=order.id, menu_item_id=item_id, quantity=qty)
-        db.add(order_item)
-    db.commit()
+    try:
+        db.add(order)
+        db.flush()  # שומר order.id בזיכרון מבלי לבצע commit
+        for item_id, qty in cart.items():
+            order_item = OrderItem(order_id=order.id, menu_item_id=item_id, quantity=qty)
+            db.add(order_item)
+        db.commit()  # commit יחיד — Order + OrderItems ביחד (C3)
+        db.refresh(order)
+        logger.info(f"הזמנה #{order.id} נוצרה בהצלחה — {customer.phone_number}")
+    except Exception:
+        db.rollback()
+        logger.exception(f"שגיאה ביצירת הזמנה עבור {customer.phone_number}")
+        raise
 
     return order
 
@@ -120,7 +129,7 @@ def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session, pa
     message_body = "\n".join(lines)
 
     if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        print(f"[התראה לגבריאל — לא נשלחה, Twilio לא מוגדר]\n{message_body}")
+        logger.warning(f"[התראה לגבריאל — לא נשלחה, Twilio לא מוגדר]\n{message_body}")
         return
 
     try:
@@ -130,5 +139,6 @@ def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session, pa
             to=GABRIEL_PHONE,
             body=message_body,
         )
-    except Exception as e:
-        print(f"שגיאה בשליחת הודעה לגבריאל: {e}")
+        logger.info(f"התראה לגבריאל נשלחה בהצלחה עבור הזמנה #{order.id}")
+    except Exception:
+        logger.exception(f"שגיאה בשליחת התראה לגבריאל עבור הזמנה #{order.id}")

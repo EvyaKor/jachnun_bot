@@ -865,10 +865,12 @@ class TestHTTPEndpoints:
 
     @pytest.fixture(autouse=True)
     def client(self):
-        """יוצר FastAPI test client."""
+        """יוצר FastAPI test client עם credentials לדשבורד."""
         from fastapi.testclient import TestClient
         import main
-        self.client = TestClient(main.app)
+        import base64
+        _creds = base64.b64encode("גבריאל:גבריאל123".encode()).decode()
+        self.client = TestClient(main.app, headers={"Authorization": f"Basic {_creds}"})
 
     def test_root_returns_200(self):
         """נקודת הבסיס / מחזירה 200."""
@@ -1138,32 +1140,32 @@ class TestNotification:
         cart = {jachnun.id: 3}
         return order, customer, cart, db
 
-    def test_notify_gabriel_with_address_shows_arrow(self):
+    def test_notify_gabriel_with_address_shows_arrow(self, caplog):
         """notify_gabriel עם כתובת מציג חץ → ואת הכתובת."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer(with_address=True)
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "רחוב הרצל 5" in printed
-                assert "→" in printed
+        assert "רחוב הרצל 5" in caplog.text
+        assert "→" in caplog.text
         db.close()
 
-    def test_notify_gabriel_without_address_no_arrow(self):
+    def test_notify_gabriel_without_address_no_arrow(self, caplog):
         """notify_gabriel ללא כתובת (איסוף עצמי) — בלי חץ."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer(with_address=False)
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "→" not in printed
-                assert "איסוף עצמי" in printed
+        assert "→" not in caplog.text
+        assert "איסוף עצמי" in caplog.text
         db.close()
 
     def test_notify_gabriel_no_twilio_no_exception(self):
@@ -1181,85 +1183,85 @@ class TestNotification:
         finally:
             db.close()
 
-    def test_notify_gabriel_message_contains_order_id(self):
+    def test_notify_gabriel_message_contains_order_id(self, caplog):
         """הודעה לגבריאל מכילה מספר הזמנה."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer()
         order_id = order.id
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert str(order_id) in printed
+        assert str(order_id) in caplog.text
         db.close()
 
-    def test_notify_gabriel_message_contains_customer_name(self):
+    def test_notify_gabriel_message_contains_customer_name(self, caplog):
         """הודעה לגבריאל מכילה שם הלקוח."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer()
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "ישראל כהן" in printed
+        assert "ישראל כהן" in caplog.text
         db.close()
 
-    def test_notify_gabriel_message_contains_customer_phone(self):
+    def test_notify_gabriel_message_contains_customer_phone(self, caplog):
         """הודעה לגבריאל מכילה מספר טלפון הלקוח."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer()
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "+972500000042" in printed
+        assert "+972500000042" in caplog.text
         db.close()
 
-    def test_notify_gabriel_message_contains_total_price(self):
+    def test_notify_gabriel_message_contains_total_price(self, caplog):
         """הודעה לגבריאל מכילה מחיר כולל."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer()
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "90" in printed
+        assert "90" in caplog.text
         db.close()
 
-    def test_notify_gabriel_message_contains_pickup_date_and_time(self):
+    def test_notify_gabriel_message_contains_pickup_date_and_time(self, caplog):
         """הודעה לגבריאל מכילה תאריך ושעה."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer()
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "05/04/2026" in printed
-                assert "09:00" in printed
+        assert "05/04/2026" in caplog.text
+        assert "09:00" in caplog.text
         db.close()
 
-    def test_notify_gabriel_message_contains_item_names_and_quantities(self):
+    def test_notify_gabriel_message_contains_item_names_and_quantities(self, caplog):
         """הודעה לגבריאל מכילה שמות פריטים וכמויות."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
         order, customer, cart, db = self._make_order_and_customer()
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "x3" in printed  # כמות
-                assert "חנון" in printed  # חלק משם הפריט (ללא גרש שמוחלק בrepr)
+        assert "x3" in caplog.text
+        assert "חנון" in caplog.text
         db.close()
 
 
@@ -1385,10 +1387,12 @@ class TestAdminDashboard:
 
     @pytest.fixture(autouse=True)
     def http_client(self):
-        """יוצר FastAPI test client."""
+        """יוצר FastAPI test client עם credentials לדשבורד."""
         from fastapi.testclient import TestClient
         import main
-        self.client = TestClient(main.app)
+        import base64
+        _creds = base64.b64encode("גבריאל:גבריאל123".encode()).decode()
+        self.client = TestClient(main.app, headers={"Authorization": f"Basic {_creds}"})
 
     def _create_order(self, phone="+972510000001", name="לקוח טסט", delivery="1",
                       items=3, payment="1"):
@@ -1733,8 +1737,9 @@ class TestFullFlowWithAddress:
         db.close()
         assert order.delivery_address == "רחוב ירושלים 10, הוד השרון"
 
-    def test_address_in_gabriel_notification(self):
+    def test_address_in_gabriel_notification(self, caplog):
         """הכתובת כלולה בהודעת ההתראה לגבריאל."""
+        import logging
         from services.order_service import notify_gabriel
         import services.order_service as order_svc
 
@@ -1761,10 +1766,9 @@ class TestFullFlowWithAddress:
         cart = {jachnun.id: 3}
 
         with patch.object(order_svc, "TWILIO_ACCOUNT_SID", None):
-            with patch("builtins.print") as mock_print:
+            with caplog.at_level(logging.WARNING, logger="services.order_service"):
                 notify_gabriel(order, customer, cart, db)
-                printed = " ".join(str(c) for c in mock_print.call_args_list)
-                assert "רחוב הנביאים 7" in printed
+        assert "רחוב הנביאים 7" in caplog.text
         db.close()
 
 
@@ -2024,6 +2028,25 @@ class TestAddressValidation:
         handle_message(PHONE, "בן גוריון 12, כפר סבא")
         assert get_state(PHONE) == ChatState.AWAITING_NAME
 
+    def test_english_only_address_rejected(self):
+        """כתובת באנגלית בלבד נדחית — חייבת להכיל תו עברי."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "Main Street 5")
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+        assert "לא ברורה" in reply
+
+    def test_digits_only_address_rejected(self):
+        """מספרים בלבד ללא עברית נדחים."""
+        self._reach_address_state()
+        reply = handle_message(PHONE, "12345 67")
+        assert get_state(PHONE) == ChatState.AWAITING_ADDRESS
+
+    def test_hebrew_with_digit_and_two_words_accepted(self):
+        """כתובת עברית קצרה עם מספר — תקינה."""
+        self._reach_address_state()
+        handle_message(PHONE, "הרצל 1")
+        assert get_state(PHONE) == ChatState.AWAITING_NAME
+
 
 # ============================================================
 # 17. בדיקות סיכום איסוף עצמי ללא כתובת
@@ -2158,3 +2181,204 @@ class TestOrderCutoff:
         # לא מקבל הודעת סגירה — ממשיך לבחירת משלוח
         assert "נסגרו" not in reply
         assert get_state(PHONE) == ChatState.CHOOSING_DELIVERY
+
+
+# ============================================================
+# 19. בדיקות Rate Limiting (TestRateLimiting)
+# ============================================================
+
+class TestRateLimiting:
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        """יוצר TestClient ומאפס את מאגר ה-rate limit לפני כל בדיקה."""
+        from fastapi.testclient import TestClient
+        import main
+        main._rate_store.clear()
+        self.client = TestClient(main.app)
+        yield
+        main._rate_store.clear()
+
+    def test_normal_usage_not_limited(self):
+        """עד 15 הודעות בדקה — לא מוגבל."""
+        phone = "+972599000001"
+        reset_session(phone)
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "היי"
+        })
+        assert response.status_code == 200
+        assert "יותר מדי" not in response.text
+
+    def test_exceeds_limit_returns_rate_limit_message(self):
+        """מעל 15 הודעות בדקה — מקבל הודעת מגבלה."""
+        import main
+        import time
+        phone = "+972599000002"
+        reset_session(phone)
+        now = time.time()
+        main._rate_store[phone] = [now] * main.MAX_MESSAGES_PER_MINUTE
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "הזמנה"
+        })
+        assert response.status_code == 200
+        assert "יותר מדי" in response.text
+
+    def test_different_phones_not_affected(self):
+        """rate limit על מספר אחד לא משפיע על מספר אחר."""
+        import main
+        import time
+        phone_a = "+972599000003"
+        phone_b = "+972599000004"
+        reset_session(phone_b)
+        now = time.time()
+        main._rate_store[phone_a] = [now] * main.MAX_MESSAGES_PER_MINUTE
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone_b}",
+            "Body": "היי"
+        })
+        assert "יותר מדי" not in response.text
+
+    def test_old_timestamps_expire(self):
+        """חלון זמן שפג תוקפו מאפס את הספירה."""
+        import main
+        import time
+        phone = "+972599000005"
+        reset_session(phone)
+        old_time = time.time() - (main.RATE_LIMIT_WINDOW + 5)
+        main._rate_store[phone] = [old_time] * main.MAX_MESSAGES_PER_MINUTE
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": "היי"
+        })
+        assert "יותר מדי" not in response.text
+
+
+# ============================================================
+# 20. בדיקות אבטחת Webhook (TestWebhookSecurity)
+# ============================================================
+
+class TestWebhookSecurity:
+
+    @pytest.fixture(autouse=True)
+    def setup_client(self):
+        """יוצר TestClient עם credentials ומנקה rate store."""
+        from fastapi.testclient import TestClient
+        import main
+        import base64
+        main._rate_store.clear()
+        _creds = base64.b64encode("גבריאל:גבריאל123".encode()).decode()
+        self.client = TestClient(main.app, headers={"Authorization": f"Basic {_creds}"})
+
+    def test_admin_unauthenticated_returns_401(self):
+        """דשבורד ללא credentials מחזיר 401."""
+        from fastapi.testclient import TestClient
+        import main
+        plain_client = TestClient(main.app)
+        response = plain_client.get("/admin")
+        assert response.status_code == 401
+
+    def test_admin_wrong_password_returns_401(self):
+        """דשבורד עם סיסמה שגויה מחזיר 401."""
+        import base64
+        from fastapi.testclient import TestClient
+        import main
+        bad_creds = base64.b64encode("גבריאל:סיסמהשגויה".encode()).decode()
+        bad_client = TestClient(main.app, headers={"Authorization": f"Basic {bad_creds}"})
+        response = bad_client.get("/admin")
+        assert response.status_code == 401
+
+    def test_admin_correct_password_returns_200(self):
+        """דשבורד עם סיסמה נכונה מחזיר 200."""
+        response = self.client.get("/admin")
+        assert response.status_code == 200
+
+    def test_long_body_does_not_crash(self):
+        """קלט ארוך מאוד לא קורס את ה-webhook."""
+        import main
+        main._rate_store.clear()
+        phone = "+972599001001"
+        reset_session(phone)
+        long_body = "א" * 10000
+        response = self.client.post("/webhook", data={
+            "From": f"whatsapp:{phone}",
+            "Body": long_body
+        })
+        assert response.status_code == 200
+
+    def test_webhook_exception_returns_friendly_message(self):
+        """אם handle_message קורסת — webhook מחזיר הודעה עברית ידידותית."""
+        import main
+        main._rate_store.clear()
+        phone = "+972599001002"
+        reset_session(phone)
+        with patch("main.handle_message", side_effect=RuntimeError("boom")):
+            response = self.client.post("/webhook", data={
+                "From": f"whatsapp:{phone}",
+                "Body": "היי"
+            })
+        assert response.status_code == 200
+        assert "שגיאה" in response.text or "מצטערים" in response.text
+
+    def test_invalid_status_update_returns_400(self):
+        """עדכון סטטוס עם ערך לא חוקי מחזיר 400."""
+        response = self.client.post("/admin/update/1", data={"status": "סטטוס_מזויף"})
+        assert response.status_code == 400
+
+
+# ============================================================
+# 21. בדיקות חישוב הכנה (TestPrepCalculation)
+# ============================================================
+
+class TestPrepCalculation:
+
+    def _make_order_with_status(self, status: str, phone: str, items: int = 1):
+        """יוצר הזמנה ומשנה את סטטוסה לערך הנתון."""
+        reset_session(phone)
+        handle_message(phone, "היי")
+        for _ in range(items):
+            handle_message(phone, "1")
+        handle_message(phone, "סיום")
+        handle_message(phone, "1")
+        handle_message(phone, "שם")
+        handle_message(phone, "09:00")
+        handle_message(phone, "אישור")
+        handle_message(phone, "1")
+        db = SessionLocal()
+        order = db.query(Order).order_by(Order.id.desc()).first()
+        order.status = status
+        db.commit()
+        db.close()
+
+    def test_prep_counts_only_confirmed_orders(self):
+        """סיכום הכנה כולל רק הזמנות 'אושר' — לא 'ממתין'."""
+        from main import _calc_prep
+        self._make_order_with_status("אושר", "+972590000101", items=2)
+        self._make_order_with_status("ממתין", "+972590000102", items=3)
+        db = SessionLocal()
+        orders = db.query(Order).all()
+        prep = _calc_prep(orders)
+        db.close()
+        # רק 2 (מהמאושרת), לא 5 (2+3)
+        assert prep.get("ג'חנון", 0) == 2
+
+    def test_prep_excludes_cancelled_orders(self):
+        """סיכום הכנה לא כולל הזמנות מבוטלות."""
+        from main import _calc_prep
+        self._make_order_with_status("בוטל", "+972590000103", items=5)
+        db = SessionLocal()
+        orders = db.query(Order).all()
+        prep = _calc_prep(orders)
+        db.close()
+        assert prep.get("ג'חנון", 0) == 0
+
+    def test_prep_empty_when_no_confirmed_orders(self):
+        """אם אין הזמנות מאושרות — סיכום ריק."""
+        from main import _calc_prep
+        self._make_order_with_status("ממתין", "+972590000104", items=2)
+        db = SessionLocal()
+        orders = db.query(Order).all()
+        prep = _calc_prep(orders)
+        db.close()
+        assert sum(prep.values()) == 0

@@ -3,25 +3,55 @@
 כולל פונקציה לזריעת נתוני התפריט הראשוניים.
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker
 from database.models import Base, MenuItem
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./jachnun.db")
 
-# SQLite דורש check_same_thread=False; Postgres לא תומך בזה
-_connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=_connect_args)
+# SQLite: דורש check_same_thread=False ואינו תומך בהגדרות pool
+# PostgreSQL: מוגדר עם pool_pre_ping וניהול חיבורים מתקדם
+if DATABASE_URL.startswith("sqlite"):
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        pool_pre_ping=True,      # בודק חיבור לפני שימוש — מונע stale connections
+        pool_size=10,            # חיבורים פעילים בו-זמנית
+        max_overflow=20,         # חיבורים נוספים תחת עומס
+        pool_recycle=3600,       # מחדש חיבורים כל שעה
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def init_db():
-    """יוצר את כל הטבלאות במסד הנתונים."""
+    """יוצר את כל הטבלאות במסד הנתונים ומריץ מיגרציות בטוחות."""
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
+
+
+def _run_migrations():
+    """
+    מוסיף עמודות חסרות לטבלאות קיימות — בטוח להרצה חוזרת.
+    מיועד לשדרוגים ללא Alembic.
+    """
+    try:
+        inspector = inspect(engine)
+        order_columns = [c["name"] for c in inspector.get_columns("orders")]
+        with engine.connect() as conn:
+            if "updated_at" not in order_columns:
+                conn.execute(text("ALTER TABLE orders ADD COLUMN updated_at TIMESTAMP"))
+                conn.commit()
+                logger.info("מיגרציה: עמודת updated_at נוספה לטבלת orders")
+    except Exception:
+        logger.exception("שגיאה בהרצת מיגרציות")
 
 
 def seed_menu():
