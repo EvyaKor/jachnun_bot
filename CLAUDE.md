@@ -182,7 +182,7 @@ CHOOSING_PAYMENT
 - Uses `StaticPool` SQLite in-memory DB shared across test session
 - **autouse fixture** patches `handlers.message_handler.is_orders_closed` → `False` so tests don't depend on real day/time
 - `TestOrderCutoff`: patches `handlers.message_handler.is_orders_closed` directly per test
-- **Admin tests**: `TestClient` initialized with `headers={"Authorization": "Basic <base64(admin:gabriel123)>"}` — required since dashboard is auth-protected
+- **Admin tests**: `TestClient` initialized with `headers={"Authorization": "Basic <base64(גבריאל:גבריאל123)>"}` — required since dashboard is auth-protected
 - **Notification tests**: use `caplog.at_level(logging.WARNING, logger="services.order_service")` — not `patch("builtins.print")`
 - Run: `venv/Scripts/python.exe -m pytest tests/test_bot.py -v` (use project venv, not system Python)
 
