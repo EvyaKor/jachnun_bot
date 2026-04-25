@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 from database.models import Customer, MenuItem, Order, OrderItem
-from twilio.rest import Client
+import httpx
 import os
 import logging
 from dotenv import load_dotenv
@@ -18,10 +18,10 @@ ISRAEL_TZ = ZoneInfo("Asia/Jerusalem")
 
 load_dotenv()
 
-GABRIEL_PHONE = os.getenv("GABRIEL_PHONE", "whatsapp:+972539475881")
-TWILIO_WHATSAPP_NUMBER = os.getenv("TWILIO_WHATSAPP_NUMBER", "whatsapp:+14155238886")
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+GABRIEL_PHONE = os.getenv("GABRIEL_PHONE", "+972539475881")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+GRAPH_API_VERSION = "v21.0"
 
 
 def is_orders_closed() -> bool:
@@ -106,7 +106,7 @@ def create_order(
 def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session, payment_method: str | None = None):
     """
     שולח הודעת וואטסאפ לגבריאל עם פרטי ההזמנה החדשה.
-    אם Twilio לא מוגדר — מדפיס ללוג בלבד.
+    אם Meta לא מוגדר — מדפיס ללוג בלבד.
     """
     lines = [f"🔔 *הזמנה חדשה #{order.id}*\n"]
     lines.append(f"👤 {customer.name or 'לא צוין'} | {customer.phone_number}")
@@ -128,17 +128,26 @@ def notify_gabriel(order: Order, customer: Customer, cart: dict, db: Session, pa
 
     message_body = "\n".join(lines)
 
-    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-        logger.warning(f"[התראה לגבריאל — לא נשלחה, Twilio לא מוגדר]\n{message_body}")
+    if not (WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID):
+        logger.warning(f"[התראה לגבריאל — לא נשלחה, Meta לא מוגדר]\n{message_body}")
         return
 
+    to_number = GABRIEL_PHONE.replace("whatsapp:", "").lstrip("+").strip()
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {"body": message_body, "preview_url": False},
+    }
+
     try:
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        client.messages.create(
-            from_=TWILIO_WHATSAPP_NUMBER,
-            to=GABRIEL_PHONE,
-            body=message_body,
-        )
-        logger.info(f"התראה לגבריאל נשלחה בהצלחה עבור הזמנה #{order.id}")
+        with httpx.Client(timeout=10) as client:
+            r = client.post(url, json=payload, headers=headers)
+            if r.status_code >= 400:
+                logger.warning(f"התראה לגבריאל נכשלה {r.status_code}: {r.text[:200]}")
+            else:
+                logger.info(f"התראה לגבריאל נשלחה בהצלחה עבור הזמנה #{order.id}")
     except Exception:
         logger.exception(f"שגיאה בשליחת התראה לגבריאל עבור הזמנה #{order.id}")

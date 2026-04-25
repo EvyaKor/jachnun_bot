@@ -1,14 +1,12 @@
 """
 ג'חנון אקספרס — שרת FastAPI ראשי.
-מקבל הודעות וואטסאפ דרך Twilio ומחזיר תשובות בעברית.
+מקבל הודעות וואטסאפ דרך Meta WhatsApp Cloud API ומחזיר תשובות בעברית.
 כולל דשבורד ניהול להזמנות לגבריאל.
 """
 
 from fastapi import FastAPI, Form, Query, Request, HTTPException, Depends
-from fastapi.responses import Response, HTMLResponse, RedirectResponse
+from fastapi.responses import Response, HTMLResponse, RedirectResponse, PlainTextResponse
 import base64 as _base64
-from twilio.twiml.messaging_response import MessagingResponse
-from twilio.request_validator import RequestValidator
 from database.db import init_db, seed_menu, SessionLocal
 from database.models import Order, OrderItem
 from sqlalchemy.orm import joinedload
@@ -17,7 +15,10 @@ from state_machine import get_state, ChatState
 from services.order_service import get_next_saturday, is_orders_closed
 from collections import defaultdict
 import asyncio
+import hashlib
+import hmac
 import httpx
+import json
 import logging
 import os
 import secrets
@@ -31,12 +32,88 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── קבועים ──────────────────────────────────────────────────────────────────
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+META_APP_SECRET = os.getenv("META_APP_SECRET")
+GRAPH_API_VERSION = "v21.0"
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "גבריאל")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "גבריאל123")
 VALID_STATUSES = {"ממתין", "אושר", "בוטל"}
 MAX_MESSAGES_PER_MINUTE = 15   # M1: הגבלת קצב הודעות לכל מספר טלפון
 RATE_LIMIT_WINDOW = 60         # שניות
+
+
+def _normalize_incoming_phone(phone: str) -> str:
+    """מנרמל מספר טלפון נכנס מ-Meta לפורמט אחיד עם +.
+    Meta שולח '972539475881' — אנחנו שומרים '+972539475881' כדי להתאים
+    למצבי שיחה קיימים שנשמרו בפורמט Twilio הישן.
+    """
+    phone = phone.strip()
+    if phone and not phone.startswith("+"):
+        phone = "+" + phone
+    return phone
+
+
+def _phone_for_meta(phone: str) -> str:
+    """מסיר '+' ו-'whatsapp:' לקראת שליחה ל-Meta API."""
+    return phone.replace("whatsapp:", "").lstrip("+").strip()
+
+
+def _verify_meta_signature(raw_body: bytes, signature_header: str) -> bool:
+    """מאמת את חתימת X-Hub-Signature-256 של Meta מול ה-APP_SECRET."""
+    if not META_APP_SECRET or not signature_header.startswith("sha256="):
+        return False
+    expected = hmac.new(
+        META_APP_SECRET.encode("utf-8"),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    received = signature_header.split("=", 1)[1]
+    return hmac.compare_digest(expected, received)
+
+
+async def _send_whatsapp_text(to: str, body: str):
+    """שולח הודעת טקסט דרך Meta Graph API."""
+    if not (WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID):
+        logger.warning(f"[שליחה דולגה — Meta לא מוגדר] {to}: {body[:60]}")
+        return
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": _phone_for_meta(to),
+        "type": "text",
+        "text": {"body": body, "preview_url": False},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, json=payload, headers=headers)
+            if r.status_code >= 400:
+                logger.warning(f"שליחת הודעה נכשלה {r.status_code}: {r.text[:200]}")
+    except Exception:
+        logger.exception(f"שגיאה בשליחת הודעה ל-{to}")
+
+
+async def _send_whatsapp_image(to: str, image_url: str):
+    """שולח הודעת תמונה דרך Meta Graph API."""
+    if not (WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID):
+        return
+    url = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": _phone_for_meta(to),
+        "type": "image",
+        "image": {"link": image_url},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(url, json=payload, headers=headers)
+            if r.status_code >= 400:
+                logger.warning(f"שליחת תמונה נכשלה {r.status_code}: {r.text[:200]}")
+    except Exception:
+        logger.exception(f"שגיאה בשליחת תמונה ל-{to}")
 
 # ── Rate limiter פשוט בזיכרון (M1) ─────────────────────────────────────────
 _rate_store: dict = defaultdict(list)
@@ -118,36 +195,40 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/webhook")
-async def whatsapp_webhook(
-    request: Request,
-    From: str = Form(...),
-    Body: str = Form(...),
-):
-    """מקבל הודעת וואטסאפ מ-Twilio ומחזיר תשובה."""
-    # ── C1: אימות חתימת Twilio (רק בפרודקשן כשהטוקן מוגדר) ──
-    if TWILIO_AUTH_TOKEN:
-        validator = RequestValidator(TWILIO_AUTH_TOKEN)
-        form_data = await request.form()
-        signature = request.headers.get("X-Twilio-Signature", "")
-        url = str(request.url)
-        if not validator.validate(url, dict(form_data), signature):
-            logger.warning(f"חתימת Twilio לא תקינה — IP: {request.client.host}")
-            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+@app.get("/webhook")
+def whatsapp_verify(request: Request):
+    """נקודת אימות חד-פעמית של Meta — מחזירה את hub.challenge אם הטוקן תואם."""
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge", "")
+    if mode == "subscribe" and token and token == WHATSAPP_VERIFY_TOKEN:
+        logger.info("Meta webhook אומת בהצלחה")
+        return PlainTextResponse(content=challenge)
+    logger.warning(f"Meta webhook verification נכשל — mode={mode}")
+    raise HTTPException(status_code=403, detail="Verification failed")
 
-    phone = From.replace("whatsapp:", "").strip()
-    body = Body.strip()[:500]  # הגבלת אורך קלט
 
-    # ── M1: Rate limiting ─────────────────────────────────────────────────────
+async def _process_message(msg: dict):
+    """מעבד הודעה בודדת מתוך ה-payload של Meta."""
+    raw_phone = msg.get("from", "")
+    if not raw_phone:
+        return
+    phone = _normalize_incoming_phone(raw_phone)
+
+    msg_type = msg.get("type", "")
+    if msg_type != "text":
+        await _send_whatsapp_text(phone, "אני מבין רק הודעות טקסט 🙏\nכתוב *שלום* להתחיל הזמנה.")
+        return
+
+    body = msg.get("text", {}).get("body", "").strip()[:500]
+
     if _is_rate_limited(phone):
         logger.warning(f"Rate limit חרג — {phone}")
-        resp = MessagingResponse()
-        resp.message("יותר מדי הודעות. המתן דקה ונסה שוב.")
-        return Response(content=str(resp), media_type="application/xml")
+        await _send_whatsapp_text(phone, "יותר מדי הודעות. המתן דקה ונסה שוב.")
+        return
 
     logger.info(f"הודעה נכנסת מ-{phone}: {body[:80]}")
 
-    # ── C5: טיפול בשגיאות — מחזיר הודעה ידידותית במקום קריסה ──
     was_greeting = False
     try:
         was_greeting = get_state(phone) == ChatState.GREETING
@@ -157,12 +238,44 @@ async def whatsapp_webhook(
         reply = "מצטערים, אירעה שגיאה טכנית. נא לנסות שוב בעוד כמה שניות."
 
     logger.info(f"תשובה ל-{phone}: {reply[:80]}")
-    response = MessagingResponse()
-    response.message(reply)
+    await _send_whatsapp_text(phone, reply)
+
     if was_greeting and get_state(phone) == ChatState.ADDING_ITEMS:
         for img_url in PRODUCT_IMAGES:
-            response.message("").media(img_url)
-    return Response(content=str(response), media_type="application/xml")
+            await _send_whatsapp_image(phone, img_url)
+
+
+@app.post("/webhook")
+async def whatsapp_webhook(request: Request):
+    """מקבל אירועי webhook מ-Meta WhatsApp Cloud API.
+    תמיד מחזיר 200 כדי למנוע retry של Meta — שגיאות נרשמות בלוג בלבד.
+    """
+    raw_body = await request.body()
+
+    # אימות חתימת Meta (רק בפרודקשן כשה-APP_SECRET מוגדר)
+    if META_APP_SECRET:
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        if not _verify_meta_signature(raw_body, signature):
+            logger.warning(f"חתימת Meta לא תקינה — IP: {request.client.host}")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+    try:
+        data = json.loads(raw_body) if raw_body else {}
+    except Exception:
+        logger.exception("Webhook payload לא JSON תקין")
+        return {"status": "ok"}
+
+    try:
+        for entry in data.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                # statuses (sent/delivered/read) ודיווחי תקלה — מתעלמים
+                for msg in value.get("messages", []) or []:
+                    await _process_message(msg)
+    except Exception:
+        logger.exception("שגיאה בעיבוד webhook")
+
+    return {"status": "ok"}
 
 
 def _calc_prep(orders: list) -> dict:
